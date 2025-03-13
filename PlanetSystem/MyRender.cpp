@@ -141,8 +141,8 @@ bool MyRender::Init(HWND hwnd)
 	m_planetVB = sphereVB;
 	m_planetIB = sphereIB;
 
-	float width = 800.0f;
-	float height = 600.0f;
+	float width = 1920.0f;
+	float height = 1080.0f;
 	m_Projection = DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV2, width / height, 0.01f, 100.0f);
 
 	//g_orbitCam.Init(Vector3(0.0f, 0.0f, 0.0f), -5.0f);
@@ -151,6 +151,7 @@ bool MyRender::Init(HWND hwnd)
 	m_pImmediateContext->VSSetShader(m_pVertexShader, NULL, 0);
 	m_pImmediateContext->PSSetShader(m_pPixelShader, NULL, 0);
 
+	SetPlanetCount(200);
 
 	return true;
 }
@@ -161,59 +162,42 @@ bool MyRender::Draw()
 {
 	Update();
 
-	static float t = 0.0f;
 	static DWORD dwTimeStart = 0;
 	DWORD dwTimeCur = GetTickCount64();
 	if (dwTimeStart == 0)
 		dwTimeStart = dwTimeCur;
-	t = (dwTimeCur - dwTimeStart) / 1000.0f;
+	float t = (dwTimeCur - dwTimeStart) / 1000.0f; // время в секундах
 
-	float dt = CalculateDeltaTime();  // Получили дельту в секундах
-	Matrix mPlanetScale = Matrix::CreateScale(0.3f, 0.3f, 0.3f);
-	Matrix mSatelliteScale = Matrix::CreateScale(0.1f, 0.1f, 0.1f);
-	Matrix mSpin = Matrix::CreateRotationY(-t);
-	Matrix mPlanetTranslate1 = Matrix::CreateTranslation(-4.0f, 0.0f, 0.0f);
-	Matrix mPlanetTranslate2 = Matrix::CreateTranslation(-8.0f, 0.0f, 0.0f);
-	Matrix mPlanetTranslate3 = Matrix::CreateTranslation(-12.0f, 0.0f, 0.0f);
-	Matrix mPlanetTranslate4 = Matrix::CreateTranslation(-16.0f, 0.0f, 0.0f);
-	Matrix mSatelliteTranslate = Matrix::CreateTranslation(-1.0f, 0.0f, 0.0f);
-	Matrix mPlanetOrbit1 = Matrix::CreateRotationY(-t * 2.0f);
-	Matrix mPlanetOrbit2 = Matrix::CreateRotationY(t * 2.2f);
-	Matrix mPlanetOrbit3 = Matrix::CreateRotationY(-t * 2.4f);
-	Matrix mPlanetOrbit4 = Matrix::CreateRotationY(t * 1.5f);
-	Matrix mSatelliteOrbit = Matrix::CreateRotationY(-t * 6.0f);
+	// Дельта времени (если нужно)
+	float dt = CalculateDeltaTime();
 
-	Matrix m_sunWorld = Matrix::CreateRotationY(t);
-	Matrix m_planetWorld1 = mPlanetScale * mSpin * mPlanetTranslate1 * mPlanetOrbit1;
-	Matrix m_satelliteWorld1 = mSatelliteScale * mSpin * mSatelliteTranslate * mSatelliteOrbit * mPlanetTranslate1 * mPlanetOrbit1;
-	Matrix m_planetWorld2 = mPlanetScale * mSpin * mPlanetTranslate2 * mPlanetOrbit2;
-	Matrix m_satelliteWorld2 = mSatelliteScale * mSpin * mSatelliteTranslate * mSatelliteOrbit * mPlanetTranslate2 * mPlanetOrbit2;
-	Matrix m_planetWorld3 = mPlanetScale * mSpin * mPlanetTranslate3 * mPlanetOrbit3;
-	Matrix m_satelliteWorld3 = mSatelliteScale * mSpin * mSatelliteTranslate * mSatelliteOrbit * mPlanetTranslate3 * mPlanetOrbit3;
-	Matrix m_planetWorld4 = mPlanetScale * mSpin * mPlanetTranslate4 * mPlanetOrbit4;
-	Matrix m_satelliteWorld4 = mSatelliteScale * mSpin * mSatelliteTranslate * mSatelliteOrbit * mPlanetTranslate4 * mPlanetOrbit4;
-
-	m_objectWorlds[0] = m_sunWorld;
-	m_objectWorlds[1] = m_planetWorld1;
-	m_objectWorlds[2] = m_planetWorld2;
-	m_objectWorlds[2] = m_planetWorld3;
-	m_objectWorlds[2] = m_planetWorld4;
-
+	// Создаём новый VB/IB (хотя обычно делают один раз при инициализации)
 	m_planetVB = CreateVertexBuffer(sphereVerts.data(), (UINT)sphereVerts.size());
 	m_planetIB = CreateIndexBuffer(sphereIdx.data(), (UINT)sphereIdx.size());
 	m_sphereIndexCount = (UINT)sphereIdx.size();
 
-	
+	Matrix sunSpin = Matrix::CreateRotationY(t);
+	float  sunScale = 0.6f;
+	Matrix sunMatrix = Matrix::CreateScale(sunScale) * sunSpin;
+	RenderObject(m_planetVB, m_planetIB, sunMatrix, m_sphereIndexCount);
 
-	RenderObject(m_planetVB, m_planetIB, m_sunWorld, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_planetWorld1, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_satelliteWorld1, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_planetWorld2, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_satelliteWorld2, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_planetWorld3, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_satelliteWorld3, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_planetWorld4, m_sphereIndexCount);
-	RenderObject(m_planetVB, m_planetIB, m_satelliteWorld4, m_sphereIndexCount);
+	for (int i = 0; i < m_planetCount; i++)
+	{
+		float distance = m_planetDistances[i];
+		float orbitSpeed = m_orbitSpeeds[i];
+		float scaleVal = 0.3f;
+
+		float angle = t * orbitSpeed;
+
+		Matrix orbit = Matrix::CreateRotationY(angle);
+		Matrix translate = Matrix::CreateTranslation(-distance, 0.0f, 0.0f);
+		Matrix scale = Matrix::CreateScale(scaleVal);
+
+		Matrix selfSpin = Matrix::CreateRotationY(t * 2.0f);
+
+		Matrix planetWorld = scale * selfSpin  * translate * orbit;
+		RenderObject(m_planetVB, m_planetIB, planetWorld, m_sphereIndexCount);
+	}
 
 	return true;
 }
@@ -313,7 +297,6 @@ void MyRender::RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffe
 	ConstantBuffer cb;
 	cb.world = XMMatrixTranspose(world);
 	cb.view = XMMatrixTranspose(m_fpsCamera.GetViewMatrix()); // <-- камера
-	//cb.view = XMMatrixTranspose(m_View);
 	cb.projection = XMMatrixTranspose(m_Projection);
 
 	m_pImmediateContext->UpdateSubresource(constantBuffer, 0, NULL, &cb, 0, 0);
@@ -456,5 +439,27 @@ void MyRender::GenerateSphere(
 			outIndices.push_back(i3);
 			outIndices.push_back(i2);
 		}
+	}
+}
+
+// MyRender.cpp
+
+void MyRender::SetPlanetCount(int count)
+{
+	m_planetCount = count;
+
+	m_planetDistances.resize(count);
+	m_orbitSpeeds.resize(count);
+	m_planetScales.resize(count);
+
+	float baseDistance = 4.0f;
+	float distStep = 4.0f;
+	for (int i = 0; i < count; i++)
+	{
+		m_planetDistances[i] = baseDistance + distStep * i;
+
+		m_orbitSpeeds[i] = 1.0f + 0.2f * i;
+
+		m_planetScales[i] = 0.3f;
 	}
 }

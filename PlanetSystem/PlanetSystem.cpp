@@ -12,8 +12,8 @@ int main()
 	MyRender* render = new MyRender();
 
 	FrameworkDesc desc;
-	desc.wnd.width = 800;
-	desc.wnd.height = 600;
+	desc.wnd.width = 1920;
+	desc.wnd.height = 1080;
 	desc.render = render;
 
 	framework.Init(desc);

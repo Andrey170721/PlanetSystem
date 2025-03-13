@@ -37,6 +37,7 @@ public:
 	{
 		_aligned_free(p);
 	}
+	void SetPlanetCount(int count);
 
 private:
 	HRESULT m_compileshaderfromfile(const WCHAR* FileName, LPCSTR EntryPoint, LPCSTR ShaderModel, ID3DBlob** ppBlobOut);
@@ -67,4 +68,11 @@ private:
 
 	FpsCamera m_fpsCamera;
 	float m_moveSpeed = 10.0f;
+
+	int m_planetCount = 0;
+
+	std::vector<float> m_planetDistances;
+	std::vector<float> m_orbitSpeeds;
+
+	std::vector<float> m_planetScales;
 };
