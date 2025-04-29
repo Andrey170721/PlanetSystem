@@ -6,6 +6,7 @@
 #include <DirectXCollision.h>
 #include "OrbitCamera.h"
 #include "FpsCamera.h"
+#include "GameObject.h"
 #include <iostream>
 #include <vector>
 #include <chrono>
@@ -21,6 +22,10 @@ public:
 	bool Init(HWND hwnd);
 	bool Draw();
 	void Update();
+	void    SpawnScene();       // разместить модели случайно
+	void    LoadPlaceholderMeshes(); // временно сферы/кубы, пока нет real-fbx
+	void    UpdateKatamari(float dt);
+	void    Attach(GameObject& obj);
 	void RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, Matrix world, UINT indexCount);
 	ID3D11Buffer* CreateVertexBuffer(const SimpleVertex* vertices, UINT vertexCount);
 	ID3D11Buffer* CreateIndexBuffer(const WORD* indices, UINT indexCount);
@@ -37,8 +42,6 @@ public:
 	{
 		_aligned_free(p);
 	}
-	void SetPlanetCount(int count);
-
 private:
 	HRESULT m_compileshaderfromfile(const WCHAR* FileName, LPCSTR EntryPoint, LPCSTR ShaderModel, ID3DBlob** ppBlobOut);
 	static float CalculateDeltaTime();
@@ -67,12 +70,14 @@ private:
 	int m_currentObject = 0;
 
 	FpsCamera m_fpsCamera;
-	float m_moveSpeed = 10.0f;
 
-	int m_planetCount = 0;
+	std::vector<MeshGPU>      m_placeholders;   // простые примитивы
+	std::vector<GameObject>   m_objects;        // всё, что лежит на полу
+	KatamariBall              m_ball;
+	float                     m_moveSpeed = 8.f;
 
-	std::vector<float> m_planetDistances;
-	std::vector<float> m_orbitSpeeds;
-
-	std::vector<float> m_planetScales;
+	ID3D11Buffer* m_planeVB = nullptr;
+	ID3D11Buffer* m_planeIB = nullptr;
+	UINT            m_planeIndexCount = 0;
+	void            CreatePlane();
 };

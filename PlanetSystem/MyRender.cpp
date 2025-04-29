@@ -1,5 +1,6 @@
-#include "MyRender.h"
+п»ї#include "MyRender.h"
 #include <d3dcompiler.h>
+#include "ModelLoader.h"
 
 static auto previousTime = std::chrono::high_resolution_clock::now();
 
@@ -14,6 +15,29 @@ struct ConstantBuffer {
 	Matrix view;
 	Matrix projection;
 };
+
+// -----------------------------------------------------------------------------
+//  РЎРѕР·РґР°РЅРёРµ ground plane вЂ” РїР°СЂР° С‚СЂРµСѓРіРѕР»СЊРЅРёРєРѕРІ 200Г—200 РЅР° y=0
+// -----------------------------------------------------------------------------
+void MyRender::CreatePlane()
+{
+	// С‡РµС‚С‹СЂРµ СѓРіР»Р° РєРІР°РґСЂР°С‚Р°
+	const float S = 100.0f;
+	SimpleVertex verts[] = {
+		{{ -S, 0.0f, -S }, {0.3f,0.3f,0.3f,1}},  // С‚РµРјРЅРѕ-СЃРµСЂС‹Р№
+		{{  S, 0.0f, -S }, {0.3f,0.3f,0.3f,1}},
+		{{  S, 0.0f,  S }, {0.3f,0.3f,0.3f,1}},
+		{{ -S, 0.0f,  S }, {0.3f,0.3f,0.3f,1}},
+	};
+	WORD idx[] = {
+		0,2,1,
+		0,3,2
+	};
+	m_planeVB = CreateVertexBuffer(verts, _countof(verts));
+	m_planeIB = CreateIndexBuffer(idx, _countof(idx));
+	m_planeIndexCount = _countof(idx);
+}
+
 
 MyRender::MyRender()
 {
@@ -55,14 +79,14 @@ HRESULT MyRender::m_compileshaderfromfile(const WCHAR* FileName, LPCSTR EntryPoi
 
 float MyRender::CalculateDeltaTime()
 {
-	// Замеряем текущее время
+	// Р—Р°РјРµСЂСЏРµРј С‚РµРєСѓС‰РµРµ РІСЂРµРјСЏ
 	auto currentTime = std::chrono::high_resolution_clock::now();
 
-	// Вычисляем разницу во времени (в секундах) как float
+	// Р’С‹С‡РёСЃР»СЏРµРј СЂР°Р·РЅРёС†Сѓ РІРѕ РІСЂРµРјРµРЅРё (РІ СЃРµРєСѓРЅРґР°С…) РєР°Рє float
 	std::chrono::duration<float> elapsed = currentTime - previousTime;
 	float deltaTime = elapsed.count();
 
-	// Запоминаем текущее время, чтобы стать «предыдущим» на след. кадре
+	// Р—Р°РїРѕРјРёРЅР°РµРј С‚РµРєСѓС‰РµРµ РІСЂРµРјСЏ, С‡С‚РѕР±С‹ СЃС‚Р°С‚СЊ В«РїСЂРµРґС‹РґСѓС‰РёРјВ» РЅР° СЃР»РµРґ. РєР°РґСЂРµ
 	previousTime = currentTime;
 
 	return deltaTime;
@@ -75,7 +99,7 @@ bool MyRender::Init(HWND hwnd)
 	hr = m_compileshaderfromfile(L"shader.hlsl", "VSMain", "vs_5_0", &pVSBlob);
 	if (FAILED(hr))
 	{
-		Log::Get()->Err("Невозможно скомпилировать файл shader.fx. Пожалуйста, запустите данную программу из папки, содержащей этот файл");
+		Log::Get()->Err("РќРµРІРѕР·РјРѕР¶РЅРѕ СЃРєРѕРјРїРёР»РёСЂРѕРІР°С‚СЊ С„Р°Р№Р» shader.fx. РџРѕР¶Р°Р»СѓР№СЃС‚Р°, Р·Р°РїСѓСЃС‚РёС‚Рµ РґР°РЅРЅСѓСЋ РїСЂРѕРіСЂР°РјРјСѓ РёР· РїР°РїРєРё, СЃРѕРґРµСЂР¶Р°С‰РµР№ СЌС‚РѕС‚ С„Р°Р№Р»");
 		return false;
 	}
 
@@ -104,7 +128,7 @@ bool MyRender::Init(HWND hwnd)
 	hr = m_compileshaderfromfile(L"shader.hlsl", "PSMain", "ps_5_0", &pPSBlob);
 	if (FAILED(hr))
 	{
-		Log::Get()->Err("Невозможно скомпилировать файл shader.fx. Пожалуйста, запустите данную программу из папки, содержащей этот файл");
+		Log::Get()->Err("РќРµРІРѕР·РјРѕР¶РЅРѕ СЃРєРѕРјРїРёР»РёСЂРѕРІР°С‚СЊ С„Р°Р№Р» shader.fx. РџРѕР¶Р°Р»СѓР№СЃС‚Р°, Р·Р°РїСѓСЃС‚РёС‚Рµ РґР°РЅРЅСѓСЋ РїСЂРѕРіСЂР°РјРјСѓ РёР· РїР°РїРєРё, СЃРѕРґРµСЂР¶Р°С‰РµР№ СЌС‚РѕС‚ С„Р°Р№Р»");
 		return false;
 	}
 
@@ -126,32 +150,36 @@ bool MyRender::Init(HWND hwnd)
 
 	m_World = DirectX::XMMatrixIdentity();
 
-
-
-	// 1) Генерируем массив вершин/индексов для сферы
-	GenerateSphere(1.0f, 20, 20, sphereVerts, sphereIdx); // радиус=1, slices=20, stacks=20
-
-	// 2) Создаём VertexBuffer
-	ID3D11Buffer* sphereVB = CreateVertexBuffer(sphereVerts.data(), (UINT)sphereVerts.size());
-
-	// 3) Создаём IndexBuffer
-	ID3D11Buffer* sphereIB = CreateIndexBuffer(sphereIdx.data(), (UINT)sphereIdx.size());
-
-	// 4) Сохраняем эти буферы как член класса, если хотите рисовать их каждый кадр
-	m_planetVB = sphereVB;
-	m_planetIB = sphereIB;
-
 	float width = 1920.0f;
 	float height = 1080.0f;
 	m_Projection = DirectX::XMMatrixPerspectiveFovLH(DirectX::XM_PIDIV2, width / height, 0.01f, 100.0f);
 
 	//g_orbitCam.Init(Vector3(0.0f, 0.0f, 0.0f), -5.0f);
-	m_fpsCamera.Init(Vector3(0.0f, 1.0f, -5.0f), 0.0f, 0.0f);
+	//m_fpsCamera.Init(Vector3(0.0f, 1.0f, -5.0f), 0.0f, 0.0f);
 
 	m_pImmediateContext->VSSetShader(m_pVertexShader, NULL, 0);
 	m_pImmediateContext->PSSetShader(m_pPixelShader, NULL, 0);
 
-	SetPlanetCount(200);
+	CreatePlane();
+
+	LoadPlaceholderMeshes();   // СЃРѕР·РґР°С‘Рј РѕРґРёРЅ СЋРЅРёС‚-РєСѓР± Рё РѕРґРЅСѓ СЋРЅРёС‚-СЃС„РµСЂСѓ
+
+	ModelLoader loader(m_pd3dDevice, m_pImmediateContext);
+	m_placeholders = loader.LoadModel(L"Models\\katamari_scene.fbx");
+
+	SpawnScene();              // СЂР°СЃРєРёРґС‹РІР°РµРј 150 РѕР±СЉРµРєС‚РѕРІ
+	// (РјРѕР¶РЅРѕ РїРѕРґРїСЂР°РІРёС‚СЊ РєРѕР»РёС‡РµСЃС‚РІРѕ)
+
+// 1) РЈСЃС‚Р°РЅР°РІР»РёРІР°РµРј РІРёР·СѓР°Р»СЊРЅС‹Р№ СЂР°РґРёСѓСЃ Рё РєРѕР»Р»РёР·РёСЋ
+	m_ball.visualRadius = 0.8f;
+	m_ball.bs = DirectX::BoundingSphere(Vector3(0, m_ball.visualRadius, 0),
+		m_ball.visualRadius);
+
+	// РѕСЂРёРµРЅС‚Р°С†РёСЏ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ
+	m_ball.orientation = Quaternion::Identity;
+
+	// 2) РљР°РјРµСЂР° В«РїСЂРёРІСЏР·Р°РЅР°В» Рє С€Р°СЂСѓ, РґРёСЃС‚Р°РЅС†РёСЏ 20 СЋРЅРёС‚РѕРІ
+	g_orbitCam.Init(m_ball.bs.Center, 5.0f);
 
 	return true;
 }
@@ -160,96 +188,32 @@ bool MyRender::Init(HWND hwnd)
 
 bool MyRender::Draw()
 {
-	Update();
-
-	static DWORD dwTimeStart = 0;
-	DWORD dwTimeCur = GetTickCount64();
-	if (dwTimeStart == 0)
-		dwTimeStart = dwTimeCur;
-	float t = (dwTimeCur - dwTimeStart) / 1000.0f; // время в секундах
-
-	// Дельта времени (если нужно)
 	float dt = CalculateDeltaTime();
+	Update();              // СЃС‚Р°СЂР°СЏ РєР°РјРµСЂР° + РєР»Р°РІРёР°С‚СѓСЂР°
+	UpdateKatamari(dt);    // РЅРѕРІР°СЏ Р»РѕРіРёРєР°
 
-	// Создаём новый VB/IB (хотя обычно делают один раз при инициализации)
-	m_planetVB = CreateVertexBuffer(sphereVerts.data(), (UINT)sphereVerts.size());
-	m_planetIB = CreateIndexBuffer(sphereIdx.data(), (UINT)sphereIdx.size());
-	m_sphereIndexCount = (UINT)sphereIdx.size();
+	RenderObject(m_planeVB, m_planeIB,
+		Matrix::Identity, m_planeIndexCount);
 
-	Matrix sunSpin = Matrix::CreateRotationY(t);
-	float  sunScale = 0.6f;
-	Matrix sunMatrix = Matrix::CreateScale(sunScale) * sunSpin;
-	RenderObject(m_planetVB, m_planetIB, sunMatrix, m_sphereIndexCount);
+	// --- С€Р°СЂ ---
+	RenderObject(m_placeholders[0].vb, m_placeholders[0].ib,
+		m_ball.world, m_placeholders[0].indexCount);
 
-	for (int i = 0; i < m_planetCount; i++)
+	// --- СЃРІРѕР±РѕРґРЅС‹Рµ + РїСЂРёСЃРѕРµРґРёРЅС‘РЅРЅС‹Рµ РѕР±СЉРµРєС‚С‹ ---
+	for (auto& obj : m_objects)
 	{
-		float distance = m_planetDistances[i];
-		float orbitSpeed = m_orbitSpeeds[i];
-		float scaleVal = 0.3f;
-
-		float angle = t * orbitSpeed;
-
-		Matrix orbit = Matrix::CreateRotationY(angle);
-		Matrix translate = Matrix::CreateTranslation(-distance, 0.0f, 0.0f);
-		Matrix scale = Matrix::CreateScale(scaleVal);
-
-		Matrix selfSpin = Matrix::CreateRotationY(t * 2.0f);
-
-		Matrix planetWorld = scale * selfSpin  * translate * orbit;
-		RenderObject(m_planetVB, m_planetIB, planetWorld, m_sphereIndexCount);
+		const Matrix world = obj.attached ? obj.local * m_ball.world
+			: obj.local;
+		RenderObject(obj.mesh.vb, obj.mesh.ib, world, obj.mesh.indexCount);
 	}
-
 	return true;
 }
 
 void MyRender::Update()
 {
-	//// Храним предыдущую позицию мыши
-	//static POINT lastMousePos = { 0,0 };
-
-	//// Текущая позиция курсора (в координатах экрана)
-	//POINT currentPos;
-	//GetCursorPos(&currentPos);
-
-	//// Вычисляем delta X, delta Y
-	//float dx = static_cast<float>(currentPos.x - lastMousePos.x);
-	//float dy = static_cast<float>(currentPos.y - lastMousePos.y);
-
-	//// Если зажата левая кнопка мыши, вращаем камеру
-	//if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
-	//{
-	//	// Обычный паттерн – dx отвечает за yaw, dy за pitch
-	//	// Знак dy можно инвертировать, если кажется «наоборот»
-	//	g_orbitCam.Rotate(dx, -dy);
-	//}
-
-	//// Сбрасываем lastMousePos
-	//lastMousePos = currentPos;
-
-	//// Пример переключения камеры на первый объект (индекс 0), 
-	//// если пользователь нажал клавишу '1'
-	//if (GetAsyncKeyState('1') & 0x0001)
-	//{
-	//	m_currentObject = 0;
-	//}
-
-	//// То же самое для второго объекта, по клавише '2'
-	//if (GetAsyncKeyState('2') & 0x0001)
-	//{
-	//	m_currentObject = 1;
-	//}
-
-	//// Обновляем камеру
-	//Vector3 pos(
-	//	m_objectWorlds[m_currentObject]._41,
-	//	m_objectWorlds[m_currentObject]._42,
-	//	m_objectWorlds[m_currentObject]._43
-	//);
-	//g_orbitCam.SetTarget(pos);
-
 	float dt = CalculateDeltaTime();
 
-	// ------ ОБРАБОТКА МЫШИ ------
+	// ------ РћР‘Р РђР‘РћРўРљРђ РњР«РЁР ------
 	static POINT lastMousePos = { 0,0 };
 
 	POINT currentPos;
@@ -259,13 +223,13 @@ void MyRender::Update()
 
 	if (GetAsyncKeyState(VK_LBUTTON) & 0x8000)
 	{
-		// вращаем FPS-камеру (dx, dy)
-		m_fpsCamera.Rotate(dx, -dy);
+		// РІСЂР°С‰Р°РµРј FPS-РєР°РјРµСЂСѓ (dx, dy)
+		g_orbitCam.Rotate(dx, -dy);
 	}
 
 	lastMousePos = currentPos;
 
-	// ------ ОБРАБОТКА КЛАВИШ ------
+	// ------ РћР‘Р РђР‘РћРўРљРђ РљР›РђР’РРЁ ------
 	float forward = 0.0f;
 	float strafe = 0.0f;
 	float upDown = 0.0f;
@@ -278,60 +242,60 @@ void MyRender::Update()
 	if (GetAsyncKeyState('A') & 0x8000)  strafe -= 1.0f;
 	if (GetAsyncKeyState('D') & 0x8000)  strafe += 1.0f;
 
-	// Пример подъёма/спуска на пробел / Ctrl (или Shift) — опционально
+	// РџСЂРёРјРµСЂ РїРѕРґСЉС‘РјР°/СЃРїСѓСЃРєР° РЅР° РїСЂРѕР±РµР» / Ctrl (РёР»Рё Shift) вЂ” РѕРїС†РёРѕРЅР°Р»СЊРЅРѕ
 	if (GetAsyncKeyState(VK_SPACE) & 0x8000)  upDown += 1.0f;
 	if (GetAsyncKeyState(VK_CONTROL) & 0x8000) upDown -= 1.0f;
 
-	// Масштабируем движение на dt, чтобы скорость не зависела от FPS
+	// РњР°СЃС€С‚Р°Р±РёСЂСѓРµРј РґРІРёР¶РµРЅРёРµ РЅР° dt, С‡С‚РѕР±С‹ СЃРєРѕСЂРѕСЃС‚СЊ РЅРµ Р·Р°РІРёСЃРµР»Р° РѕС‚ FPS
 	forward *= m_moveSpeed * dt;
 	strafe *= m_moveSpeed * dt;
 	upDown *= m_moveSpeed * dt;
 
-	// Двигаем камеру
-	m_fpsCamera.Move(forward, strafe, upDown);
+	// Р”РІРёРіР°РµРј РєР°РјРµСЂСѓ
+	//m_fpsCamera.Move(forward, strafe, upDown);
 }
 
 void MyRender::RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, Matrix world, UINT indexCount)
 {
-	// Обновляем CB, как и раньше
+	// РћР±РЅРѕРІР»СЏРµРј CB, РєР°Рє Рё СЂР°РЅСЊС€Рµ
 	ConstantBuffer cb;
 	cb.world = XMMatrixTranspose(world);
-	cb.view = XMMatrixTranspose(m_fpsCamera.GetViewMatrix()); // <-- камера
+	cb.view = XMMatrixTranspose(g_orbitCam.GetViewMatrix()); // <-- РєР°РјРµСЂР°
 	cb.projection = XMMatrixTranspose(m_Projection);
 
 	m_pImmediateContext->UpdateSubresource(constantBuffer, 0, NULL, &cb, 0, 0);
 
 	m_pImmediateContext->VSSetConstantBuffers(0, 1, &constantBuffer);
 
-	// Привязка вершинного и индексного буфера
+	// РџСЂРёРІСЏР·РєР° РІРµСЂС€РёРЅРЅРѕРіРѕ Рё РёРЅРґРµРєСЃРЅРѕРіРѕ Р±СѓС„РµСЂР°
 	UINT stride = sizeof(SimpleVertex);
 	UINT offset = 0;
 	m_pImmediateContext->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
 	m_pImmediateContext->IASetIndexBuffer(indexBuffer, DXGI_FORMAT_R16_UINT, 0);
 
-	// Рисуем
+	// Р РёСЃСѓРµРј
 	m_pImmediateContext->DrawIndexed(indexCount, 0, 0);
 }
 
 ID3D11Buffer* MyRender::CreateVertexBuffer(const SimpleVertex* vertices, UINT vertexCount)
 {
-	// Описываем буфер
+	// РћРїРёСЃС‹РІР°РµРј Р±СѓС„РµСЂ
 	D3D11_BUFFER_DESC bd = {};
 	bd.Usage = D3D11_USAGE_DEFAULT;
-	bd.ByteWidth = sizeof(SimpleVertex) * vertexCount;  // Размер под vertexCount вершин
+	bd.ByteWidth = sizeof(SimpleVertex) * vertexCount;  // Р Р°Р·РјРµСЂ РїРѕРґ vertexCount РІРµСЂС€РёРЅ
 	bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 	bd.CPUAccessFlags = 0;
 
-	// Данные для инициализации
+	// Р”Р°РЅРЅС‹Рµ РґР»СЏ РёРЅРёС†РёР°Р»РёР·Р°С†РёРё
 	D3D11_SUBRESOURCE_DATA initData = {};
 	initData.pSysMem = vertices;
 
-	// Создаем буфер
+	// РЎРѕР·РґР°РµРј Р±СѓС„РµСЂ
 	ID3D11Buffer* vBuffer = nullptr;
 	HRESULT hr = m_pd3dDevice->CreateBuffer(&bd, &initData, &vBuffer);
 	if (FAILED(hr))
 	{
-		// Обработать ошибку (например, вывести в лог)
+		// РћР±СЂР°Р±РѕС‚Р°С‚СЊ РѕС€РёР±РєСѓ (РЅР°РїСЂРёРјРµСЂ, РІС‹РІРµСЃС‚Рё РІ Р»РѕРі)
 		return nullptr;
 	}
 	return vBuffer;
@@ -341,7 +305,7 @@ ID3D11Buffer* MyRender::CreateIndexBuffer(const WORD* indices, UINT indexCount)
 {
 	D3D11_BUFFER_DESC bd = {};
 	bd.Usage = D3D11_USAGE_DEFAULT;
-	bd.ByteWidth = sizeof(WORD) * indexCount; // Под indexCount индексов
+	bd.ByteWidth = sizeof(WORD) * indexCount; // РџРѕРґ indexCount РёРЅРґРµРєСЃРѕРІ
 	bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
 	bd.CPUAccessFlags = 0;
 
@@ -352,7 +316,7 @@ ID3D11Buffer* MyRender::CreateIndexBuffer(const WORD* indices, UINT indexCount)
 	HRESULT hr = m_pd3dDevice->CreateBuffer(&bd, &initData, &iBuffer);
 	if (FAILED(hr))
 	{
-		// Обработать ошибку
+		// РћР±СЂР°Р±РѕС‚Р°С‚СЊ РѕС€РёР±РєСѓ
 		return nullptr;
 	}
 	return iBuffer;
@@ -369,8 +333,8 @@ void MyRender::Close()
 	_RELEASE(m_planetIB);
 }
 
-// Генерация сферы радиусом radius,
-// с количеством делений по широте (stacks) и долготе (slices)
+// Р“РµРЅРµСЂР°С†РёСЏ СЃС„РµСЂС‹ СЂР°РґРёСѓСЃРѕРј radius,
+// СЃ РєРѕР»РёС‡РµСЃС‚РІРѕРј РґРµР»РµРЅРёР№ РїРѕ С€РёСЂРѕС‚Рµ (stacks) Рё РґРѕР»РіРѕС‚Рµ (slices)
 void MyRender::GenerateSphere(
 	float radius,
 	unsigned int slices,
@@ -383,28 +347,28 @@ void MyRender::GenerateSphere(
 	outVertices.clear();
 	outIndices.clear();
 
-	// Перебираем stacks (параллели) от 0 до stacks
-	// phi = угол от -90° (южный полюс) до +90° (северный)
+	// РџРµСЂРµР±РёСЂР°РµРј stacks (РїР°СЂР°Р»Р»РµР»Рё) РѕС‚ 0 РґРѕ stacks
+	// phi = СѓРіРѕР» РѕС‚ -90В° (СЋР¶РЅС‹Р№ РїРѕР»СЋСЃ) РґРѕ +90В° (СЃРµРІРµСЂРЅС‹Р№)
 	for (unsigned int i = 0; i <= stacks; i++)
 	{
 		float phi = XM_PI * (float)i / (float)stacks - XM_PI / 2;
-		float y = radius * sinf(phi);       // от -R до +R
-		float r = radius * cosf(phi);       // «горизонтальный» радиус круга на данной широте
+		float y = radius * sinf(phi);       // РѕС‚ -R РґРѕ +R
+		float r = radius * cosf(phi);       // В«РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Р№В» СЂР°РґРёСѓСЃ РєСЂСѓРіР° РЅР° РґР°РЅРЅРѕР№ С€РёСЂРѕС‚Рµ
 
-		// Перебираем slices (долготы) от 0 до slices
-		// theta = угол от 0..2PI вокруг оси
+		// РџРµСЂРµР±РёСЂР°РµРј slices (РґРѕР»РіРѕС‚С‹) РѕС‚ 0 РґРѕ slices
+		// theta = СѓРіРѕР» РѕС‚ 0..2PI РІРѕРєСЂСѓРі РѕСЃРё
 		for (unsigned int j = 0; j <= slices; j++)
 		{
 			float theta = 2.0f * XM_PI * (float)j / (float)slices;
 			float x = r * cosf(theta);
 			float z = r * sinf(theta);
 
-			// Добавим вершину
+			// Р”РѕР±Р°РІРёРј РІРµСЂС€РёРЅСѓ
 			SimpleVertex v;
 			v.Pos = Vector3(x, y, z);
-			// Покрасим, например, в зависимости от phi, theta,
-			// или сделаем единый цвет. Для примера пусть будет
-			// что-то, зависящее от координат:
+			// РџРѕРєСЂР°СЃРёРј, РЅР°РїСЂРёРјРµСЂ, РІ Р·Р°РІРёСЃРёРјРѕСЃС‚Рё РѕС‚ phi, theta,
+			// РёР»Рё СЃРґРµР»Р°РµРј РµРґРёРЅС‹Р№ С†РІРµС‚. Р”Р»СЏ РїСЂРёРјРµСЂР° РїСѓСЃС‚СЊ Р±СѓРґРµС‚
+			// С‡С‚Рѕ-С‚Рѕ, Р·Р°РІРёСЃСЏС‰РµРµ РѕС‚ РєРѕРѕСЂРґРёРЅР°С‚:
 			v.Color = Vector4(
 				(x / radius + 1.0f) * 0.5f,
 				(y / radius + 1.0f) * 0.5f,
@@ -415,26 +379,26 @@ void MyRender::GenerateSphere(
 		}
 	}
 
-	// Теперь генерируем индексы.
-	// Каждый «квадратик» на сфере составит 2 треугольника:
-	// stack шаг i, slice шаг j
-	unsigned int stride = slices + 1; // кол-во вершин в «строке»
+	// РўРµРїРµСЂСЊ РіРµРЅРµСЂРёСЂСѓРµРј РёРЅРґРµРєСЃС‹.
+	// РљР°Р¶РґС‹Р№ В«РєРІР°РґСЂР°С‚РёРєВ» РЅР° СЃС„РµСЂРµ СЃРѕСЃС‚Р°РІРёС‚ 2 С‚СЂРµСѓРіРѕР»СЊРЅРёРєР°:
+	// stack С€Р°Рі i, slice С€Р°Рі j
+	unsigned int stride = slices + 1; // РєРѕР»-РІРѕ РІРµСЂС€РёРЅ РІ В«СЃС‚СЂРѕРєРµВ»
 	for (unsigned int i = 0; i < stacks; i++)
 	{
 		for (unsigned int j = 0; j < slices; j++)
 		{
-			// Индексы четырёх углов «квадратика» (i, i+1 по вертикали; j, j+1 по горизонтали)
+			// РРЅРґРµРєСЃС‹ С‡РµС‚С‹СЂС‘С… СѓРіР»РѕРІ В«РєРІР°РґСЂР°С‚РёРєР°В» (i, i+1 РїРѕ РІРµСЂС‚РёРєР°Р»Рё; j, j+1 РїРѕ РіРѕСЂРёР·РѕРЅС‚Р°Р»Рё)
 			WORD i0 = (WORD)(i * stride + j);
 			WORD i1 = (WORD)(i * stride + j + 1);
 			WORD i2 = (WORD)((i + 1) * stride + j);
 			WORD i3 = (WORD)((i + 1) * stride + j + 1);
 
-			// 1) Треугольник (i0, i1, i2)
+			// 1) РўСЂРµСѓРіРѕР»СЊРЅРёРє (i0, i1, i2)
 			outIndices.push_back(i0);
 			outIndices.push_back(i1);
 			outIndices.push_back(i2);
 
-			// 2) Треугольник (i1, i3, i2)
+			// 2) РўСЂРµСѓРіРѕР»СЊРЅРёРє (i1, i3, i2)
 			outIndices.push_back(i1);
 			outIndices.push_back(i3);
 			outIndices.push_back(i2);
@@ -442,24 +406,195 @@ void MyRender::GenerateSphere(
 	}
 }
 
-// MyRender.cpp
+#include <random>
 
-void MyRender::SetPlanetCount(int count)
+//----------------------------------------------------------------------
+// 1.  Р—Р°РіСЂСѓР¶Р°РµРј / РіРµРЅРµСЂРёСЂСѓРµРј РїСЂРѕСЃС‚С‹Рµ РјРµС€Рё-Р·Р°РіР»СѓС€РєРё
+//----------------------------------------------------------------------
+void MyRender::LoadPlaceholderMeshes()
 {
-	m_planetCount = count;
-
-	m_planetDistances.resize(count);
-	m_orbitSpeeds.resize(count);
-	m_planetScales.resize(count);
-
-	float baseDistance = 4.0f;
-	float distStep = 4.0f;
-	for (int i = 0; i < count; i++)
+	// ---------- 1) РЎС„РµСЂР° (РєР°С‚Р°РјР°СЂРё Рё РјРµР»РєРёРµ С€Р°СЂРёРєРё) ----------
 	{
-		m_planetDistances[i] = baseDistance + distStep * i;
+		std::vector<SimpleVertex> v;
+		std::vector<WORD>         i;
+		GenerateSphere(1.0f, 16, 16, v, i);          // СЂР°РґРёСѓСЃ 1
 
-		m_orbitSpeeds[i] = 1.0f + 0.2f * i;
-
-		m_planetScales[i] = 0.3f;
+		MeshGPU m;
+		m.vb = CreateVertexBuffer(v.data(), (UINT)v.size());
+		m.ib = CreateIndexBuffer(i.data(), (UINT)i.size());
+		m.indexCount = (UINT)i.size();
+		m.bsRadius = 1.0f;
+		m_placeholders.push_back(m);
 	}
+
+	// ---------- 2) РљСѓР± (РєРѕСЂРѕР±РєРё, СЏС‰РёРєРё вЂ¦) ----------
+	{
+		// СѓРїСЂРѕС‰С‘РЅРЅС‹Р№ unit-cube (РїРѕР·РёС†РёСЏ + С†РІРµС‚)
+		const SimpleVertex verts[] =
+		{
+			{{-0.5f,-0.5f,-0.5f},{1,0,0,1}}, {{-0.5f, 0.5f,-0.5f},{0,1,0,1}},
+			{{ 0.5f, 0.5f,-0.5f},{0,0,1,1}}, {{ 0.5f,-0.5f,-0.5f},{1,1,0,1}},
+			{{-0.5f,-0.5f, 0.5f},{1,0,1,1}}, {{-0.5f, 0.5f, 0.5f},{0,1,1,1}},
+			{{ 0.5f, 0.5f, 0.5f},{1,1,1,1}}, {{ 0.5f,-0.5f, 0.5f},{0,0,0,1}}
+		};
+		const WORD idx[] =
+		{
+			0,1,2, 0,2,3,   // -Z
+			4,6,5, 4,7,6,   // +Z
+			4,5,1, 4,1,0,   // -X
+			3,2,6, 3,6,7,   // +X
+			1,5,6, 1,6,2,   // +Y
+			4,0,3, 4,3,7    // -Y
+		};
+
+		MeshGPU m;
+		m.vb = CreateVertexBuffer(verts, _countof(verts));
+		m.ib = CreateIndexBuffer(idx, _countof(idx));
+		m.indexCount = _countof(idx);
+		m.bsRadius = 0.8660254f;
+		m_placeholders.push_back(m);
+	}
+}
+
+//----------------------------------------------------------------------
+// 2.  РЎР»СѓС‡Р°Р№РЅРѕ РЅР°РїРѕР»РЅСЏРµРј СЃС†РµРЅСѓ РѕР±СЉРµРєС‚Р°РјРё-В«РјСѓСЃРѕСЂРѕРјВ»
+//----------------------------------------------------------------------
+void MyRender::SpawnScene()
+{
+	std::mt19937                rng{ std::random_device{}() };
+	std::uniform_real_distribution<float> posDist(-50.f, 50.f);  // XZ
+	std::uniform_real_distribution<float> sclDist(0.3f, 1.2f);
+	std::uniform_int_distribution<int>    meshDist(0, (int)m_placeholders.size() - 1);
+
+	const int objectCount = 150;
+	m_objects.reserve(objectCount);
+
+	for (int n = 0; n < objectCount; ++n)
+	{
+		GameObject obj;
+		obj.mesh = m_placeholders[meshDist(rng)];
+
+		float scale = sclDist(rng);
+		float x = posDist(rng);
+		float z = posDist(rng);
+
+		// Р»РѕРєР°Р»СЊРЅР°СЏ BoundingSphere РґР»СЏ РєСѓР±Р° РёР»Рё СЃС„РµСЂС‹-placeholderвЂ™Р°
+		obj.bs = DirectX::BoundingSphere(Vector3::Zero, obj.mesh.bsRadius * scale);
+
+		// РїСЂРµРґРјРµС‚ СЃС‚РѕРёС‚ РЅР° РїРѕР»Сѓ в‡’ y = radius
+		float y = obj.bs.Radius;
+		obj.local = Matrix::CreateScale(scale) *
+			Matrix::CreateTranslation(x, y, z);
+		obj.attached = false;
+
+		m_objects.push_back(obj);
+	}
+}
+
+//----------------------------------------------------------------------
+// 3.  Р”РІРёР¶РµРЅРёРµ С€Р°СЂР° + РїРѕРїС‹С‚РєР° В«РїСЂРёР»РёРїРЅСѓС‚СЊВ» РѕР±СЉРµРєС‚С‹
+//----------------------------------------------------------------------
+void MyRender::UpdateKatamari(float dt)
+{
+	// 1) РїРѕР»СѓС‡Р°РµРј WASD
+	float forward = 0, strafe = 0;
+	if (GetAsyncKeyState('W') & 0x8000) forward += 1;
+	if (GetAsyncKeyState('S') & 0x8000) forward -= 1;
+	if (GetAsyncKeyState('A') & 0x8000) strafe -= 1;
+	if (GetAsyncKeyState('D') & 0x8000) strafe += 1;
+
+	// 2) РІС‹С‡РёСЃР»СЏРµРј Р»РѕРєР°Р»СЊРЅС‹Рµ РІРµРєС‚РѕСЂС‹ РєР°РјРµСЂС‹
+	Vector3 camPos = g_orbitCam.GetPosition();
+	Vector3 toBall = m_ball.bs.Center - camPos;
+	toBall.y = 0;
+	if (toBall.LengthSquared() > 0) toBall.Normalize();
+
+	// СЃРѕР·РґР°С‘Рј В«РІРІРµСЂС…В» Рё В«РІРїРµСЂС‘РґВ» РІРµРєС‚РѕСЂС‹
+	Vector3 up(0.0f, 1.0f, 0.0f);
+	Vector3 forwardVec = toBall;  // СѓР¶Рµ РЅРѕСЂРјР°Р»РёР·РѕРІР°РЅ
+
+	Vector3 rightVec = up.Cross(forwardVec);
+	rightVec.Normalize();
+
+	// 3) РёС‚РѕРіРѕРІС‹Р№ РІРµРєС‚РѕСЂ РґРІРёР¶РµРЅРёСЏ
+	Vector3 move = toBall * forward + rightVec * strafe;
+	if (move.LengthSquared() > 0) move.Normalize();
+	move *= m_moveSpeed * dt;
+
+	// 4) СЃРґРІРёРіР°РµРј С†РµРЅС‚СЂ С€Р°СЂРёРєР° (РєРѕР»Р»РёР·РёРё)
+	m_ball.bs.Center.x += move.x;
+	m_ball.bs.Center.z += move.z;
+	m_ball.bs.Center.y = m_ball.visualRadius;
+
+	// 5) СЃС‡РёС‚Р°РµРј СЂРѕР»Р»-РІСЂР°С‰РµРЅРёРµ
+	if (move.LengthSquared() > 0.0f)
+	{
+		Vector3 moveDir = move;
+		moveDir.Normalize();
+
+		// Р—Р°РґР°С‘Рј РІРµРєС‚РѕСЂ В«РІРІРµСЂС…В»
+		Vector3 up(0, 1, 0);
+
+		// РћСЃСЊ РІСЂР°С‰РµРЅРёСЏ = up Г— moveDir  (РЅРµ moveDir Г— up!)
+		Vector3 spinAxis = up.Cross(moveDir);
+		if (spinAxis.LengthSquared() > 0.0f)
+			spinAxis.Normalize();
+
+		// РџСЂРѕР№РґРµРЅРЅРѕРµ СЂР°СЃСЃС‚РѕСЏРЅРёРµ = |move|, СѓРіРѕР» = distance / R
+		float travel = move.Length();
+		float spinAngle = travel / m_ball.visualRadius; // РІ СЂР°РґРёР°РЅР°С…
+
+		// Р”РµР»СЊС‚Р°-РєРІР°С‚РµСЂРЅРёРѕРЅ РїРѕ РѕСЃРё spinAxis
+		Quaternion delta = Quaternion::CreateFromAxisAngle(spinAxis, spinAngle);
+
+		// РќР°РєСЂСѓС‡РёРІР°РµРј РЅРѕРІРѕРµ РІСЂР°С‰РµРЅРёРµ *РїРѕСЃР»Рµ* СЃС‚Р°СЂРѕРіРѕ
+		m_ball.orientation = m_ball.orientation * delta;
+		m_ball.orientation.Normalize();
+	}
+
+	// 6) СЃРѕР±РёСЂР°РµРј world-РјР°С‚СЂРёС†Сѓ
+	m_ball.world =
+		Matrix::CreateFromQuaternion(m_ball.orientation)
+		* Matrix::CreateTranslation(m_ball.bs.Center);
+
+
+
+	// 7) РєРѕР»Р»РёР·РёРё (РєР°Рє Р±С‹Р»Рѕ), РЅРѕ СЂР°РґРёСѓСЃ С‚РµРїРµСЂСЊ РІРЅСѓС‚СЂРё m_ball.bs.Radius
+	for (auto& obj : m_objects)
+	{
+		if (obj.attached) continue;
+		DirectX::BoundingSphere objBS = obj.bs;
+		objBS.Transform(objBS, obj.local);
+		if (objBS.Intersects(m_ball.bs) &&
+			objBS.Radius <= m_ball.bs.Radius + 0.05f)
+		{
+			Attach(obj);
+		}
+	}
+
+	// 8) РѕР±РЅРѕРІР»СЏРµРј С†РµР»СЊ РєР°РјРµСЂС‹
+	g_orbitCam.SetTarget(m_ball.bs.Center);
+}
+
+
+//----------------------------------------------------------------------
+// 4.  РџСЂРёРєР»РµРёРІР°РЅРёРµ РїСЂРµРґРјРµС‚Р° Рє С€Р°СЂСѓ
+//----------------------------------------------------------------------
+void MyRender::Attach(GameObject& obj)
+{
+	obj.attached = true;
+
+	// РїРµСЂРµРІРѕРґРёРј РѕР±СЉРµРєС‚ РІ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ С€Р°СЂР°
+	obj.local = obj.local * Matrix::CreateTranslation(-m_ball.bs.Center.x,
+		-m_ball.bs.Center.y,
+		-m_ball.bs.Center.z
+	);
+
+	// СЂР°СЃС‚РёРј РєР°С‚Р°РјР°СЂРё
+	m_ball.bs.Radius += obj.bs.Radius * m_ball.growRate;
+
+	// РїРѕРґРЅСЏС‚СЊ С†РµРЅС‚СЂ, РїРµСЂРµСЃРѕР±СЂР°С‚СЊ world-РјР°С‚СЂРёС†Сѓ
+	/*m_ball.bs.Center.y = m_ball.bs.Radius;
+	m_ball.world = Matrix::CreateScale(m_ball.bs.Radius) *
+		Matrix::CreateTranslation(m_ball.bs.Center);*/
 }

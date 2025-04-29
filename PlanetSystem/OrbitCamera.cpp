@@ -68,3 +68,15 @@ Matrix OrbitCamera::GetViewMatrix() const
     // Камера смотрит на target, «вверх» – всегда Y
     return DirectX::XMMatrixLookAtLH(cameraPos, m_target, g_Up);
 }
+
+Vector3 OrbitCamera::GetPosition() const
+{
+    float cosP = cosf(m_pitch), sinP = sinf(m_pitch);
+    float cosY = cosf(m_yaw), sinY = sinf(m_yaw);
+
+    Vector3 pos;
+    pos.x = m_target.x + m_distance * cosP * sinY;
+    pos.y = m_target.y + m_distance * sinP;
+    pos.z = m_target.z + m_distance * cosP * cosY;
+    return pos;
+}

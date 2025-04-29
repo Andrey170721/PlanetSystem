@@ -25,6 +25,8 @@ public:
     // Получить матрицу вида для рендера
     Matrix GetViewMatrix() const;
 
+    Vector3 GetPosition() const;
+
 private:
     Vector3 m_target;   // Координаты центра «орбиты»
     float   m_distance; // Текущая дистанция от камеры до target
