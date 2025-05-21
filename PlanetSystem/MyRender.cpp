@@ -160,6 +160,21 @@ bool MyRender::Init(HWND hwnd)
 	m_pImmediateContext->VSSetShader(m_pVertexShader, NULL, 0);
 	m_pImmediateContext->PSSetShader(m_pPixelShader, NULL, 0);
 
+	D3D11_SAMPLER_DESC sampDesc = {};
+	sampDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	sampDesc.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+	sampDesc.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+	sampDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	sampDesc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+	sampDesc.MinLOD = 0;
+	sampDesc.MaxLOD = D3D11_FLOAT32_MAX;
+
+	HRESULT hr = m_pd3dDevice->CreateSamplerState(&sampDesc, &m_samplerState);
+	if (FAILED(hr)) {
+		Log::Get()->Err("Ошибка создания SamplerState");
+		return false;
+	}
+
 	CreatePlane();
 
 	LoadPlaceholderMeshes();   // создаём один юнит-куб и одну юнит-сферу
@@ -181,6 +196,29 @@ bool MyRender::Init(HWND hwnd)
 	// 2) Камера «привязана» к шару, дистанция 20 юнитов
 	g_orbitCam.Init(m_ball.bs.Center, 5.0f);
 
+	// После создания m_pPixelShader (старого PSMain):
+	ID3DBlob* pGradPS = nullptr;
+	m_compileshaderfromfile(L"shader.hlsl", "PSGradient", "ps_5_0", &pGradPS);
+	m_pd3dDevice->CreatePixelShader(pGradPS->GetBufferPointer(), pGradPS->GetBufferSize(), nullptr, &m_pPSGradient);
+	_RELEASE(pGradPS);
+
+	ID3DBlob* pTexPS = nullptr;
+	m_compileshaderfromfile(L"shader.hlsl", "PSTextured", "ps_5_0", &pTexPS);
+	m_pd3dDevice->CreatePixelShader(pTexPS->GetBufferPointer(), pTexPS->GetBufferSize(), nullptr, &m_pPSTextured);
+	_RELEASE(pTexPS);
+
+	// Создаём буфер GradCB:
+	struct GradCB { DirectX::XMFLOAT4 bottom, top; float height; float pad; } gradInit = {
+		{ m_gradBottomColor.x, m_gradBottomColor.y, m_gradBottomColor.z, m_gradBottomColor.w },
+		{ m_gradTopColor.x, m_gradTopColor.y, m_gradTopColor.z, m_gradTopColor.w },
+		m_gradHeight,
+		0
+	};
+	D3D11_BUFFER_DESC bd = {}; bd.ByteWidth = sizeof(gradInit); bd.Usage = D3D11_USAGE_DEFAULT;
+	bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	D3D11_SUBRESOURCE_DATA sd = { &gradInit,0,0 };
+	m_pd3dDevice->CreateBuffer(&bd, &sd, &m_gradCB);
+
 	return true;
 }
 
@@ -192,20 +230,21 @@ bool MyRender::Draw()
 	Update();              // старая камера + клавиатура
 	UpdateKatamari(dt);    // новая логика
 
-	RenderObject(m_planeVB, m_planeIB,
+	// рисуем пол
+	RenderObject(m_planeVB, m_planeIB, nullptr, true,
 		Matrix::Identity, m_planeIndexCount);
 
-	// --- шар ---
-	RenderObject(m_placeholders[0].vb, m_placeholders[0].ib,
-		m_ball.world, m_placeholders[0].indexCount);
+	// рисуем шарик
+	RenderObject(m_planetVB, m_planetIB, nullptr, true,
+		m_ball.world, m_sphereIndexCount);
 
-	// --- свободные + присоединённые объекты ---
-	for (auto& obj : m_objects)
-	{
-		const Matrix world = obj.attached ? obj.local * m_ball.world
-			: obj.local;
-		RenderObject(obj.mesh.vb, obj.mesh.ib, world, obj.mesh.indexCount);
+	// рисуем объекты из реальных моделей
+	for (auto& obj : m_objects) {
+		RenderObject(obj.mesh.vb, obj.mesh.ib, obj.mesh.texture, false,
+			obj.local * (obj.attached ? m_ball.world : Matrix::Identity),
+			obj.mesh.indexCount);
 	}
+
 	return true;
 }
 
@@ -255,7 +294,13 @@ void MyRender::Update()
 	//m_fpsCamera.Move(forward, strafe, upDown);
 }
 
-void MyRender::RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, Matrix world, UINT indexCount)
+void MyRender::RenderObject(
+	ID3D11Buffer* vb,
+	ID3D11Buffer* ib,
+	ID3D11ShaderResourceView* texSRV,
+	bool useGradient,
+	const DirectX::SimpleMath::Matrix& world,
+	UINT indexCount)
 {
 	// Обновляем CB, как и раньше
 	ConstantBuffer cb;
@@ -267,13 +312,22 @@ void MyRender::RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffe
 
 	m_pImmediateContext->VSSetConstantBuffers(0, 1, &constantBuffer);
 
-	// Привязка вершинного и индексного буфера
-	UINT stride = sizeof(SimpleVertex);
-	UINT offset = 0;
-	m_pImmediateContext->IASetVertexBuffers(0, 1, &vertexBuffer, &stride, &offset);
-	m_pImmediateContext->IASetIndexBuffer(indexBuffer, DXGI_FORMAT_R16_UINT, 0);
+	m_pImmediateContext->VSSetShader(m_pVertexShader, nullptr, 0);
 
-	// Рисуем
+	if (useGradient) {
+		m_pImmediateContext->PSSetShader(m_pPSGradient, nullptr, 0);
+		// bind gradCB → slot b1
+		m_pImmediateContext->PSSetConstantBuffers(1, 1, &m_gradCB);
+	}
+	else {
+		m_pImmediateContext->PSSetShader(m_pPSTextured, nullptr, 0);
+		m_pImmediateContext->PSSetShaderResources(0, 1, &texSRV);
+		m_pImmediateContext->PSSetSamplers(0, 1, &m_samplerState);
+	}
+
+	UINT stride = sizeof(SimpleVertex), offset = 0;
+	m_pImmediateContext->IASetVertexBuffers(0, 1, &vb, &stride, &offset);
+	m_pImmediateContext->IASetIndexBuffer(ib, DXGI_FORMAT_R16_UINT, 0);
 	m_pImmediateContext->DrawIndexed(indexCount, 0, 0);
 }
 
@@ -423,7 +477,6 @@ void MyRender::LoadPlaceholderMeshes()
 		m.vb = CreateVertexBuffer(v.data(), (UINT)v.size());
 		m.ib = CreateIndexBuffer(i.data(), (UINT)i.size());
 		m.indexCount = (UINT)i.size();
-		m.bsRadius = 1.0f;
 		m_placeholders.push_back(m);
 	}
 
@@ -451,7 +504,6 @@ void MyRender::LoadPlaceholderMeshes()
 		m.vb = CreateVertexBuffer(verts, _countof(verts));
 		m.ib = CreateIndexBuffer(idx, _countof(idx));
 		m.indexCount = _countof(idx);
-		m.bsRadius = 0.8660254f;
 		m_placeholders.push_back(m);
 	}
 }
@@ -479,7 +531,7 @@ void MyRender::SpawnScene()
 		float z = posDist(rng);
 
 		// локальная BoundingSphere для куба или сферы-placeholder’а
-		obj.bs = DirectX::BoundingSphere(Vector3::Zero, obj.mesh.bsRadius * scale);
+		obj.bs = DirectX::BoundingSphere(Vector3::Zero, scale);
 
 		// предмет стоит на полу ⇒ y = radius
 		float y = obj.bs.Radius;

@@ -8,14 +8,6 @@
 
 using namespace DirectX::SimpleMath;
 
-struct MeshGPU     // ссылки на VB/IB, их хватит для рисования
-{
-    ID3D11Buffer* vb = nullptr;
-    ID3D11Buffer* ib = nullptr;
-    UINT indexCount = 0;
-    float bsRadius = 1.0f;
-};
-
 struct GameObject
 {
     MeshGPU mesh;               // геометрия

@@ -26,7 +26,13 @@ public:
 	void    LoadPlaceholderMeshes(); // временно сферы/кубы, пока нет real-fbx
 	void    UpdateKatamari(float dt);
 	void    Attach(GameObject& obj);
-	void RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, Matrix world, UINT indexCount);
+	void RenderObject(
+		ID3D11Buffer* vb,
+		ID3D11Buffer* ib,
+		ID3D11ShaderResourceView* texSRV,
+		bool useGradient,
+		const DirectX::SimpleMath::Matrix& world,
+		UINT indexCount);
 	ID3D11Buffer* CreateVertexBuffer(const SimpleVertex* vertices, UINT vertexCount);
 	ID3D11Buffer* CreateIndexBuffer(const WORD* indices, UINT indexCount);
 	void Close();
@@ -80,4 +86,12 @@ private:
 	ID3D11Buffer* m_planeIB = nullptr;
 	UINT            m_planeIndexCount = 0;
 	void            CreatePlane();
+
+	ID3D11PixelShader* m_pPSGradient = nullptr;
+	ID3D11PixelShader* m_pPSTextured = nullptr;
+	ID3D11Buffer* m_gradCB = nullptr;  // буфер gradBottom/top/height
+	float              m_gradHeight = 100.0f;    // например размер плоскости
+	DirectX::XMFLOAT4             m_gradBottomColor = {0.1f,0.3f,0.1f,1}; // тёмно-зелёный
+	DirectX::XMFLOAT4             m_gradTopColor = { 0.8f,1.0f,0.8f,1 }; // светло-зелёный
+	ID3D11SamplerState* m_samplerState = nullptr;
 };

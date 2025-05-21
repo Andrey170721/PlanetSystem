@@ -1,44 +1,65 @@
+﻿
+// shader.hlsl
 
-cbuffer ConstantBuffer
+cbuffer CB : register(b0)
 {
-    matrix world; // ������� ���� (������������� �������)
-    matrix view; // ������� ������� (������)
-    matrix projection; // ������������ ������� (����������� / ���������������)
-  
+    matrix world;
+    matrix view;
+    matrix proj;
 };
 
-struct VS_IN
+// цвета для градиента
+cbuffer GradCB : register(b1)
 {
-    float4 pos : POSITION0;
-    float4 col : COLOR0;
+    float4 gradBottom; // цвет на уровне y = 0
+    float4 gradTop; // цвет на уровне y = H
+    float gradHeight; // H
 };
 
-struct PS_IN
+Texture2D gDiffuse : register(t0);
+SamplerState gSampler : register(s0);
+
+struct VSInput
 {
-    float4 pos : SV_POSITION;
-    float4 col : COLOR;
+    float3 Pos : POSITION;
+    float4 Color : COLOR; // не будет использоваться для градиента
+    float2 UV : TEXCOORD0; // для моделей
 };
 
-PS_IN VSMain(VS_IN input)
+struct PSInput
 {
-    PS_IN output = (PS_IN) 0;
-	
-    output.pos = mul(input.pos, world);
-    output.pos = mul(output.pos, view);
-    output.pos = mul(output.pos, projection);
-    //output.pos = input.pos;
-    
-    output.col = input.col;
-    
-    
-    return output;
+    float4 PosH : SV_POSITION;
+    float3 WorldPos : TEXCOORD0;
+    float3 NormalWS : TEXCOORD1;
+    float2 UV : TEXCOORD2;
+};
+
+// единый VS для всего
+PSInput VSMain(VSInput IN)
+{
+    PSInput OUT;
+    float4 worldPos = mul(float4(IN.Pos, 1), world);
+    OUT.PosH = mul(mul(worldPos, view), proj);
+    OUT.WorldPos = worldPos.xyz;
+    OUT.NormalWS = mul(IN.Pos, (float3x3) world);
+    OUT.UV = IN.UV;
+    return OUT;
 }
 
-float4 PSMain(PS_IN input) : SV_Target
+// ———————————————————————————————————————————————————————————
+// 1) Пиксельный шейдер для градиента (пол + катамари)
+// ———————————————————————————————————————————————————————————
+float4 PSGradient(PSInput IN) : SV_TARGET
 {
-    float4 col = input.col;
-#ifdef TEST
-	if (input.pos.x > 400) col = TCOLOR;
-#endif
-    return col;
+    // нормализуем высоту (0…gradHeight) → 0…1
+    float t = saturate(IN.WorldPos.y / gradHeight);
+    return lerp(gradBottom, gradTop, t);
+}
+
+// ———————————————————————————————————————————————————————————
+// 2) Пиксельный шейдер для текстурированных моделей
+// ———————————————————————————————————————————————————————————
+float4 PSTextured(PSInput IN) : SV_TARGET
+{
+    return gDiffuse.Sample(gSampler, IN.UV);
 }

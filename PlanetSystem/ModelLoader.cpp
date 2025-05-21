@@ -3,6 +3,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
+#include <cstdlib>
 #include <WICTextureLoader.h> // из DirectXTK, дл€ загрузки текстур
 
 ModelLoader::ModelLoader(ID3D11Device* dev, ID3D11DeviceContext* ctx)
@@ -22,7 +23,11 @@ std::vector<MeshGPU> ModelLoader::LoadModel(const std::wstring& filePath)
 
     // Ѕазовый путь дл€ текстур
     wchar_t drive[_MAX_DRIVE], dir[_MAX_DIR];
-    _wsplitpath_s(filePath.c_str(), drive, dir, nullptr, 0, nullptr, 0, nullptr, 0);
+    _wsplitpath_s(filePath.c_str(),
+        drive, _MAX_DRIVE,
+        dir, _MAX_DIR,
+        nullptr, 0,
+        nullptr, 0);
     std::wstring baseDir = std::wstring(drive) + std::wstring(dir);
 
     std::vector<MeshGPU> result;
