@@ -157,6 +157,14 @@ bool MyRender::Init(HWND hwnd)
 
 	m_pd3dDevice->CreateBuffer(&cbDesc, nullptr, &constantBuffer);
 
+	// создаём буфер для LightBufferType
+D3D11_BUFFER_DESC lbDesc = {};
+lbDesc.Usage          = D3D11_USAGE_DEFAULT;
+lbDesc.ByteWidth      = sizeof(LightBufferType);
+lbDesc.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
+lbDesc.CPUAccessFlags = 0;
+m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
+
 	// —– создаём линейный сэмплер для текстур —–
 	D3D11_SAMPLER_DESC sd = {};
 	sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -200,6 +208,16 @@ bool MyRender::Init(HWND hwnd)
 	m_pImmediateContext->VSSetShader(m_pVertexShader, NULL, 0);
 	m_pImmediateContext->PSSetShader(m_pPixelShader, NULL, 0);
 
+	// направленный свет «сверху»:
+	lb.dirLight.direction = { -0.5f, -1.0f, -0.3f };
+	lb.dirLight.color = { 1.0f, 1.0f, 1.0f };
+
+	// материал бочки/шара:
+	lb.mat.ambient = { 0.1f, 0.1f, 0.1f };
+	lb.mat.diffuse = { 1.0f, 1.0f, 1.0f };
+	lb.mat.specular = { 1.0f, 1.0f, 1.0f };
+	lb.mat.specPower = 32.0f;
+
 	CreatePlane();
 
 	//LoadPlaceholderMeshes();   // создаём один юнит-куб и одну юнит-сферу
@@ -224,12 +242,23 @@ bool MyRender::Init(HWND hwnd)
 
 bool MyRender::Draw()
 {
+	// получаем камеру из вашего OrbitCamera
+	auto camPos = g_orbitCam.GetPosition();
+	lb.viewPos = DirectX::XMFLOAT3(camPos.x, camPos.y, camPos.z);
+
+	// записываем в GPU
+	m_pImmediateContext->UpdateSubresource(m_lightBuffer, 0, nullptr, &lb, 0, 0);
+
+	// привязываем в слот b1
+	m_pImmediateContext->PSSetConstantBuffers(1, 1, &m_lightBuffer);
+
 	float dt = CalculateDeltaTime();
 	Update();              // старая камера + клавиатура
 	UpdateKatamari(dt);    // новая логика
 
 	m_pImmediateContext->PSSetShaderResources(0, 1, &m_planeTexture);
 	m_pImmediateContext->PSSetSamplers(0, 1, &m_samplerState);
+	m_pImmediateContext->PSSetShader(m_pPixelShader, nullptr, 0);
 	RenderObject(m_planeVB, m_planeIB, Matrix::Identity, m_planeIndexCount);
 
 	// --- шар ---

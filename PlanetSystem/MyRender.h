@@ -15,6 +15,29 @@ using namespace D3D11Framework;
 using namespace DirectX::SimpleMath;
 struct SimpleVertex;
 
+struct Light {
+	DirectX::XMFLOAT3 direction;
+	float              pad1;
+	DirectX::XMFLOAT3 color;
+	float              pad2;
+};
+
+struct Material {
+	DirectX::XMFLOAT3 ambient;
+	float              pad1;
+	DirectX::XMFLOAT3 diffuse;
+	float              pad2;
+	DirectX::XMFLOAT3 specular;
+	float              specPower;
+};
+
+struct LightBufferType {
+	Light          dirLight;
+	Material       mat;
+	DirectX::XMFLOAT3 viewPos;
+	float             pad3;
+};
+
 class MyRender : public Render
 {
 public:
@@ -87,4 +110,7 @@ private:
 
 	UINT            m_planeIndexCount = 0;
 	void            CreatePlane();
+
+	ID3D11Buffer* m_lightBuffer = nullptr;
+	LightBufferType lb = {};
 };
