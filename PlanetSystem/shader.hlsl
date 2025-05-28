@@ -1,44 +1,36 @@
-
-cbuffer ConstantBuffer
-{
-    matrix world; // Матрица мира (трансформация объекта)
-    matrix view; // Видовая матрица (камера)
-    matrix projection; // Проекционная матрица (перспектива / ортографическая)
-  
-};
-
+// Simple vertex+pixel shader
 struct VS_IN
 {
-    float4 pos : POSITION0;
-    float4 col : COLOR0;
+    float3 Pos : POSITION;
+    float2 TexUV : TEXCOORD0;
 };
 
 struct PS_IN
 {
-    float4 pos : SV_POSITION;
-    float4 col : COLOR;
+    float4 Pos : SV_POSITION;
+    float2 TexUV : TEXCOORD0;
+};
+
+Texture2D g_Texture : register(t0);
+SamplerState g_Sampler : register(s0);
+
+cbuffer ConstantBuffer : register(b0)
+{
+    matrix world;
+    matrix view;
+    matrix proj;
 };
 
 PS_IN VSMain(VS_IN input)
 {
-    PS_IN output = (PS_IN) 0;
-	
-    output.pos = mul(input.pos, world);
-    output.pos = mul(output.pos, view);
-    output.pos = mul(output.pos, projection);
-    //output.pos = input.pos;
-    
-    output.col = input.col;
-    
-    
+    PS_IN output;
+    float4 posW = mul(float4(input.Pos, 1.0f), world);
+    output.Pos = mul(mul(posW, view), proj);
+    output.TexUV = input.TexUV;
     return output;
 }
 
 float4 PSMain(PS_IN input) : SV_Target
 {
-    float4 col = input.col;
-#ifdef TEST
-	if (input.pos.x > 400) col = TCOLOR;
-#endif
-    return col;
+    return g_Texture.Sample(g_Sampler, input.TexUV);
 }

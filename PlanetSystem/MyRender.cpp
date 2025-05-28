@@ -70,11 +70,21 @@ HRESULT MyRender::m_compileshaderfromfile(const WCHAR* FileName, LPCSTR EntryPoi
 		ppBlobOut,
 		&pErrorBlob);
 
-	if (FAILED(hr) && pErrorBlob != NULL)
-		OutputDebugStringA((char*)pErrorBlob->GetBufferPointer());
-
-	_RELEASE(pErrorBlob);
-	return hr;
+	if (FAILED(hr))
+	{
+		if (pErrorBlob)
+		{
+			// Выводим сообщение об ошибке
+			OutputDebugStringA((char*)pErrorBlob->GetBufferPointer());
+			MessageBoxA(nullptr, (char*)pErrorBlob->GetBufferPointer(),
+				"Shader Compile Error", MB_OK | MB_ICONERROR);
+			Log::Get()->Err((char*)pErrorBlob->GetBufferPointer());
+			pErrorBlob->Release();
+		}
+		return hr;
+	}
+	if (pErrorBlob) pErrorBlob->Release();
+	return S_OK;
 }
 
 float MyRender::CalculateDeltaTime()
@@ -99,7 +109,7 @@ bool MyRender::Init(HWND hwnd)
 	hr = m_compileshaderfromfile(L"shader.hlsl", "VSMain", "vs_5_0", &pVSBlob);
 	if (FAILED(hr))
 	{
-		Log::Get()->Err("Невозможно скомпилировать файл shader.fx. Пожалуйста, запустите данную программу из папки, содержащей этот файл");
+		Log::Get()->Err("Невозможно скомпилировать файл shader.hlsl");
 		return false;
 	}
 
@@ -128,7 +138,7 @@ bool MyRender::Init(HWND hwnd)
 	hr = m_compileshaderfromfile(L"shader.hlsl", "PSMain", "ps_5_0", &pPSBlob);
 	if (FAILED(hr))
 	{
-		Log::Get()->Err("Невозможно скомпилировать файл shader.fx. Пожалуйста, запустите данную программу из папки, содержащей этот файл");
+		Log::Get()->Err("Невозможно скомпилировать файл shader.hlsl");
 		return false;
 	}
 
@@ -148,6 +158,26 @@ bool MyRender::Init(HWND hwnd)
 
 	m_pd3dDevice->CreateBuffer(&cbDesc, nullptr, &constantBuffer);
 
+	// —– создаём линейный сэмплер для текстур —–
+	D3D11_SAMPLER_DESC sd = {};
+	sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	sd.AddressU = D3D11_TEXTURE_ADDRESS_WRAP;
+	sd.AddressV = D3D11_TEXTURE_ADDRESS_WRAP;
+	sd.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+	sd.MinLOD = 0;
+	sd.MaxLOD = D3D11_FLOAT32_MAX;
+	m_pd3dDevice->CreateSamplerState(&sd, &m_samplerState);
+
+	// Загружаем пул моделей
+	ModelLoader loader(m_pd3dDevice, m_pImmediateContext);
+
+	auto barrel = loader.LoadModel(L"Models\\Barrel_FBX.fbx", L"Models\\Textures\\barrel_BaseColor.png");
+
+	barrel.sampler = m_samplerState;  // привязываем сэмплер
+
+	m_modelPool.push_back(barrel);
+
 	m_World = DirectX::XMMatrixIdentity();
 
 	float width = 1920.0f;
@@ -162,13 +192,9 @@ bool MyRender::Init(HWND hwnd)
 
 	CreatePlane();
 
-	LoadPlaceholderMeshes();   // создаём один юнит-куб и одну юнит-сферу
-
-	ModelLoader loader(m_pd3dDevice, m_pImmediateContext);
-	m_placeholders = loader.LoadModel(L"Models\\katamari_scene.fbx");
+	//LoadPlaceholderMeshes();   // создаём один юнит-куб и одну юнит-сферу
 
 	SpawnScene();              // раскидываем 150 объектов
-	// (можно подправить количество)
 
 // 1) Устанавливаем визуальный радиус и коллизию
 	m_ball.visualRadius = 0.8f;
@@ -204,7 +230,7 @@ bool MyRender::Draw()
 	{
 		const Matrix world = obj.attached ? obj.local * m_ball.world
 			: obj.local;
-		RenderObject(obj.mesh.vb, obj.mesh.ib, world, obj.mesh.indexCount);
+		RenderObject(obj.mesh, world);
 	}
 	return true;
 }
@@ -275,6 +301,32 @@ void MyRender::RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffe
 
 	// Рисуем
 	m_pImmediateContext->DrawIndexed(indexCount, 0, 0);
+}
+
+void MyRender::RenderObject(MeshGPU mesh, Matrix world)
+{
+	// Обновляем CB, как и раньше
+	ConstantBuffer cb;
+	cb.world = XMMatrixTranspose(world);
+	cb.view = XMMatrixTranspose(g_orbitCam.GetViewMatrix()); // <-- камера
+	cb.projection = XMMatrixTranspose(m_Projection);
+
+	m_pImmediateContext->UpdateSubresource(constantBuffer, 0, NULL, &cb, 0, 0);
+
+	m_pImmediateContext->VSSetConstantBuffers(0, 1, &constantBuffer);
+
+	// Привязка вершинного и индексного буфера
+	UINT stride = sizeof(SimpleVertex);
+	UINT offset = 0;
+	m_pImmediateContext->IASetVertexBuffers(0, 1, &mesh.vb, &stride, &offset);
+	m_pImmediateContext->IASetIndexBuffer(mesh.ib, DXGI_FORMAT_R16_UINT, 0);
+
+	// привязываем текстуру и сэмплер
+	m_pImmediateContext->PSSetShaderResources(0, 1, &mesh.texture);
+	m_pImmediateContext->PSSetSamplers(0, 1, &mesh.sampler);
+
+	// Рисуем
+	m_pImmediateContext->DrawIndexed(mesh.indexCount, 0, 0);
 }
 
 ID3D11Buffer* MyRender::CreateVertexBuffer(const SimpleVertex* vertices, UINT vertexCount)
@@ -459,29 +511,26 @@ void MyRender::LoadPlaceholderMeshes()
 //----------------------------------------------------------------------
 // 2.  Случайно наполняем сцену объектами-«мусором»
 //----------------------------------------------------------------------
-void MyRender::SpawnScene()
-{
-	std::mt19937                rng{ std::random_device{}() };
-	std::uniform_real_distribution<float> posDist(-50.f, 50.f);  // XZ
-	std::uniform_real_distribution<float> sclDist(0.3f, 1.2f);
-	std::uniform_int_distribution<int>    meshDist(0, (int)m_placeholders.size() - 1);
+void MyRender::SpawnScene() {
+	std::mt19937 rng{ std::random_device{}() };
+	std::uniform_real_distribution<float> posDist(-50.f, 50.f);
+	std::uniform_real_distribution<float> sclDist(0.5f, 1.5f);
+	std::uniform_int_distribution<int>    meshDist(0, (int)m_modelPool.size() - 1);
 
 	const int objectCount = 150;
+	m_objects.clear();
 	m_objects.reserve(objectCount);
 
-	for (int n = 0; n < objectCount; ++n)
-	{
+	for (int i = 0; i < objectCount; ++i) {
 		GameObject obj;
-		obj.mesh = m_placeholders[meshDist(rng)];
+		// берём случайную модель из пула
+		obj.mesh = m_modelPool[meshDist(rng)];
 
 		float scale = sclDist(rng);
 		float x = posDist(rng);
 		float z = posDist(rng);
 
-		// локальная BoundingSphere для куба или сферы-placeholder’а
 		obj.bs = DirectX::BoundingSphere(Vector3::Zero, obj.mesh.bsRadius * scale);
-
-		// предмет стоит на полу ⇒ y = radius
 		float y = obj.bs.Radius;
 		obj.local = Matrix::CreateScale(scale) *
 			Matrix::CreateTranslation(x, y, z);

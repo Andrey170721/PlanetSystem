@@ -27,6 +27,7 @@ public:
 	void    UpdateKatamari(float dt);
 	void    Attach(GameObject& obj);
 	void RenderObject(ID3D11Buffer* vertexBuffer, ID3D11Buffer* indexBuffer, Matrix world, UINT indexCount);
+	void RenderObject(MeshGPU mesh, Matrix world);
 	ID3D11Buffer* CreateVertexBuffer(const SimpleVertex* vertices, UINT vertexCount);
 	ID3D11Buffer* CreateIndexBuffer(const WORD* indices, UINT indexCount);
 	void Close();
@@ -78,6 +79,10 @@ private:
 
 	ID3D11Buffer* m_planeVB = nullptr;
 	ID3D11Buffer* m_planeIB = nullptr;
+
+	std::vector<MeshGPU> m_modelPool;
+	ID3D11SamplerState* m_samplerState = nullptr;
+
 	UINT            m_planeIndexCount = 0;
 	void            CreatePlane();
 };

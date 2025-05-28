@@ -1,30 +1,33 @@
-// ModelLoader.h
+//// ModelLoader.h
 #pragma once
-#include <vector>
-#include <string>
-#include <SimpleMath.h>
 #include <d3d11.h>
+#include <string>
+#include "GameObject.h"
 
-struct TexturedVertex {
-    DirectX::SimpleMath::Vector3 Pos;
-    DirectX::SimpleMath::Vector3 Normal;
-    DirectX::SimpleMath::Vector2 UV;
-};
+struct aiMesh;
+struct aiScene;
 
-struct MeshGPU {
-    ID3D11Buffer* vb = nullptr;
-    ID3D11Buffer* ib = nullptr;
-    UINT                       indexCount = 0;
-    ID3D11ShaderResourceView* texture = nullptr;
+// Вершина должна совпадать с входом вашего шейдера (POSITION, TEXCOORD0, NORMAL)
+struct Vertex {
+    DirectX::XMFLOAT3 Pos;
+    DirectX::XMFLOAT3 Normal;
+    DirectX::XMFLOAT2 UV;
 };
 
 class ModelLoader {
 public:
-    // device/context для создания буферов и текстур
-    ModelLoader(ID3D11Device* dev, ID3D11DeviceContext* ctx);
-    // Загружает .obj или .fbx и возвращает массив мешей
-    std::vector<MeshGPU> LoadModel(const std::wstring& filePath);
+    ModelLoader(ID3D11Device* device, ID3D11DeviceContext* context);
+    // modelPath — .obj/.fbx, texturePath — путь до диффузной текстуры
+    MeshGPU LoadModel(const std::wstring& modelPath, const std::wstring& texturePath);
+
 private:
-    ID3D11Device* m_dev;
-    ID3D11DeviceContext* m_ctx;
+    void ProcessMesh(aiMesh* mesh,
+        const aiScene* scene,
+        std::vector<Vertex>& vertices,
+        std::vector<uint32_t>& indices);
+
+    float CalculateBoundingSphere(const std::vector<Vertex>& verts);
+
+    ID3D11Device* m_device;
+    ID3D11DeviceContext* m_context;
 };

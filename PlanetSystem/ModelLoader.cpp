@@ -1,87 +1,108 @@
 // ModelLoader.cpp
 #include "ModelLoader.h"
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
-#include <WICTextureLoader.h> // из DirectXTK, для загрузки текстур
 
-ModelLoader::ModelLoader(ID3D11Device* dev, ID3D11DeviceContext* ctx)
-    : m_dev(dev), m_ctx(ctx) {
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+
+#include "WICTextureLoader.h"   // из DirectXTK
+
+ModelLoader::ModelLoader(ID3D11Device* device, ID3D11DeviceContext* context)
+    : m_device(device), m_context(context)
+{
 }
 
-std::vector<MeshGPU> ModelLoader::LoadModel(const std::wstring& filePath)
-{
+MeshGPU ModelLoader::LoadModel(const std::wstring& modelPath, const std::wstring& texturePath) {
+    // 1) Импорт сцены
     Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(
-        std::string(filePath.begin(), filePath.end()),
+    std::string path(modelPath.begin(), modelPath.end());
+    const aiScene* scene = importer.ReadFile(path,
         aiProcess_Triangulate |
-        aiProcess_CalcTangentSpace |
-        aiProcess_ConvertToLeftHanded
-    );
-    if (!scene || !scene->HasMeshes()) return {};
+        aiProcess_ConvertToLeftHanded |
+        aiProcess_GenNormals |
+        aiProcess_OptimizeMeshes);
 
-    // Базовый путь для текстур
-    wchar_t drive[_MAX_DRIVE], dir[_MAX_DIR];
-    _wsplitpath_s(filePath.c_str(), drive, dir, nullptr, 0, nullptr, 0, nullptr, 0);
-    std::wstring baseDir = std::wstring(drive) + std::wstring(dir);
+    if (!scene || !scene->mRootNode || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE)
+        throw std::runtime_error("Assimp error: " + std::string(importer.GetErrorString()));
 
-    std::vector<MeshGPU> result;
-    for (unsigned m = 0; m < scene->mNumMeshes; ++m)
-    {
-        aiMesh* mesh = scene->mMeshes[m];
-        std::vector<TexturedVertex> verts(mesh->mNumVertices);
-        for (unsigned i = 0; i < mesh->mNumVertices; ++i) {
-            verts[i].Pos = { mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z };
-            verts[i].Normal = { mesh->mNormals[i].x,  mesh->mNormals[i].y,  mesh->mNormals[i].z };
-            if (mesh->HasTextureCoords(0))
-                verts[i].UV = { mesh->mTextureCoords[0][i].x,
-                                mesh->mTextureCoords[0][i].y };
-            else
-                verts[i].UV = { 0,0 };
-        }
-        // Индексы
-        std::vector<UINT> idx;
-        for (unsigned f = 0; f < mesh->mNumFaces; ++f) {
-            aiFace& face = mesh->mFaces[f];
-            for (unsigned j = 0; j < face.mNumIndices; ++j)
-                idx.push_back(face.mIndices[j]);
-        }
+    // 2) Собираем вершины и индексы из всех мешей
+    std::vector<Vertex>     vertices;
+    std::vector<uint32_t>   indices;
+    for (UINT i = 0; i < scene->mNumMeshes; ++i)
+        ProcessMesh(scene->mMeshes[i], scene, vertices, indices);
 
-        // Создаём VB
-        D3D11_BUFFER_DESC bd = {};
-        bd.Usage = D3D11_USAGE_DEFAULT;
-        bd.ByteWidth = sizeof(TexturedVertex) * (UINT)verts.size();
-        bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-        D3D11_SUBRESOURCE_DATA init = { verts.data(), 0,0 };
-        ID3D11Buffer* vb = nullptr;
-        m_dev->CreateBuffer(&bd, &init, &vb);
+    // 3) Создаём VB
+    D3D11_BUFFER_DESC bd = {};
+    bd.Usage = D3D11_USAGE_DEFAULT;
+    bd.ByteWidth = UINT(sizeof(Vertex) * vertices.size());
+    bd.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA initVB{ vertices.data(), 0, 0 };
+    ID3D11Buffer* vb = nullptr;
+    m_device->CreateBuffer(&bd, &initVB, &vb);
 
-        // Создаём IB
-        bd.ByteWidth = sizeof(UINT) * (UINT)idx.size();
-        bd.BindFlags = D3D11_BIND_INDEX_BUFFER;
-        init.pSysMem = idx.data();
-        ID3D11Buffer* ib = nullptr;
-        m_dev->CreateBuffer(&bd, &init, &ib);
+    // 4) Создаём IB
+    D3D11_BUFFER_DESC ibd = {};
+    ibd.Usage = D3D11_USAGE_DEFAULT;
+    ibd.ByteWidth = UINT(sizeof(uint32_t) * indices.size());
+    ibd.BindFlags = D3D11_BIND_INDEX_BUFFER;
+    D3D11_SUBRESOURCE_DATA initIB{ indices.data(), 0, 0 };
+    ID3D11Buffer* ib = nullptr;
+    m_device->CreateBuffer(&ibd, &initIB, &ib);
 
-        // Загружаем текстуру материала
-        ID3D11ShaderResourceView* srv = nullptr;
-        if (scene->HasMaterials()) {
-            aiMaterial* mat = scene->mMaterials[mesh->mMaterialIndex];
-            aiString texPath;
-            if (mat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-                std::wstring full = baseDir + std::wstring(texPath.C_Str(), texPath.length);
-                // CreateWICTextureFromFile из DirectXTK
-                DirectX::CreateWICTextureFromFile(m_dev, m_ctx,
-                    full.c_str(), nullptr, &srv);
-            }
-        }
+    // 5) Загружаем текстуру
+    ID3D11ShaderResourceView* srv = nullptr;
+    HRESULT hr = DirectX::CreateWICTextureFromFile(
+        m_device, m_context, texturePath.c_str(), nullptr, &srv);
+    if (FAILED(hr))
+        throw std::runtime_error("Failed to load texture");
 
-        MeshGPU gpu;
-        gpu.vb = vb;
-        gpu.ib = ib;
-        gpu.indexCount = (UINT)idx.size();
-        gpu.texture = srv;
-        result.push_back(gpu);
+    // 6) Собираем MeshGPU
+    MeshGPU mesh;
+    mesh.vb = vb;
+    mesh.ib = ib;
+    mesh.indexCount = (UINT)indices.size();
+    mesh.bsRadius = CalculateBoundingSphere(vertices);
+    mesh.texture = srv;
+    // sampler будем привязывать централизованно (m_samplerState из MyRender)
+    return mesh;
+}
+
+void ModelLoader::ProcessMesh(aiMesh* mesh,
+    const aiScene* /*scene*/,
+    std::vector<Vertex>& vertices,
+    std::vector<uint32_t>& indices)
+{
+    UINT baseVert = (UINT)vertices.size();
+    // вершины
+    for (UINT i = 0; i < mesh->mNumVertices; ++i) {
+        Vertex v;
+        v.Pos.x = mesh->mVertices[i].x;
+        v.Pos.y = mesh->mVertices[i].y;
+        v.Pos.z = mesh->mVertices[i].z;
+        v.Normal.x = mesh->mNormals[i].x;
+        v.Normal.y = mesh->mNormals[i].y;
+        v.Normal.z = mesh->mNormals[i].z;
+        if (mesh->HasTextureCoords(0))
+            v.UV = { mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y };
+        else
+            v.UV = { 0, 0 };
+        vertices.push_back(v);
     }
-    return result;
+    // индексы
+    for (UINT f = 0; f < mesh->mNumFaces; ++f) {
+        aiFace& face = mesh->mFaces[f];
+        for (UINT j = 0; j < face.mNumIndices; ++j)
+            indices.push_back(face.mIndices[j] + baseVert);
+    }
+}
+
+float ModelLoader::CalculateBoundingSphere(const std::vector<Vertex>& verts) {
+    DirectX::XMFLOAT3 center{ 0,0,0 };
+    // простой способ: взять мельшую гранулу вокруг начала
+    float maxD2 = 0;
+    for (auto& v : verts) {
+        float d2 = v.Pos.x * v.Pos.x + v.Pos.y * v.Pos.y + v.Pos.z * v.Pos.z;
+        if (d2 > maxD2) maxD2 = d2;
+    }
+    return sqrtf(maxD2);
 }
