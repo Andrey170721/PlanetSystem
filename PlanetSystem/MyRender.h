@@ -82,6 +82,8 @@ private:
 
 	std::vector<MeshGPU> m_modelPool;
 	ID3D11SamplerState* m_samplerState = nullptr;
+	MeshGPU    m_ballMesh;
+	ID3D11ShaderResourceView* m_planeTexture;
 
 	UINT            m_planeIndexCount = 0;
 	void            CreatePlane();

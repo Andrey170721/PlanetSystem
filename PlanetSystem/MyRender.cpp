@@ -1,13 +1,14 @@
 ﻿#include "MyRender.h"
 #include <d3dcompiler.h>
+#include "WICTextureLoader.h"
 #include "ModelLoader.h"
 
 static auto previousTime = std::chrono::high_resolution_clock::now();
 
-struct SimpleVertex
-{
+struct SimpleVertex {
 	Vector3 Pos;
-	Vector4 Color;
+	Vector3 Normal;
+	Vector2 UV;
 };
 
 struct ConstantBuffer {
@@ -21,19 +22,16 @@ struct ConstantBuffer {
 // -----------------------------------------------------------------------------
 void MyRender::CreatePlane()
 {
-	// четыре угла квадрата
 	const float S = 100.0f;
 	SimpleVertex verts[] = {
-		{{ -S, 0.0f, -S }, {0.3f,0.3f,0.3f,1}},  // темно-серый
-		{{  S, 0.0f, -S }, {0.3f,0.3f,0.3f,1}},
-		{{  S, 0.0f,  S }, {0.3f,0.3f,0.3f,1}},
-		{{ -S, 0.0f,  S }, {0.3f,0.3f,0.3f,1}},
-	};
-	WORD idx[] = {
-		0,2,1,
-		0,3,2
+	  {{-S,0,-S}, {0,1,0}, {0,0}},
+	  {{ S,0,-S}, {0,1,0}, {1,0}},
+	  {{ S,0, S}, {0,1,0}, {1,1}},
+	  {{-S,0, S}, {0,1,0}, {0,1}},
 	};
 	m_planeVB = CreateVertexBuffer(verts, _countof(verts));
+
+	WORD idx[] = { 0,2,1, 0,3,2 };
 	m_planeIB = CreateIndexBuffer(idx, _countof(idx));
 	m_planeIndexCount = _countof(idx);
 }
@@ -122,8 +120,9 @@ bool MyRender::Init(HWND hwnd)
 
 	D3D11_INPUT_ELEMENT_DESC layout[] =
 	{
-		{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-		{ "COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	  { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	  { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	  { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24,D3D11_INPUT_PER_VERTEX_DATA, 0 },
 	};
 	UINT numElements = ARRAYSIZE(layout);
 
@@ -174,9 +173,20 @@ bool MyRender::Init(HWND hwnd)
 
 	auto barrel = loader.LoadModel(L"Models\\Barrel_FBX.fbx", L"Models\\Textures\\barrel_BaseColor.png");
 
+	auto ballMesh = loader.LoadModel(
+		L"Models\\soccer_ball.fbx",
+		L"Models\\Textures\\soccer_ball_mat_bcolor.png");
+	ballMesh.sampler = m_samplerState;
+	m_ballMesh = ballMesh;
+
 	barrel.sampler = m_samplerState;  // привязываем сэмплер
 
 	m_modelPool.push_back(barrel);
+
+	DirectX::CreateWICTextureFromFile(
+		m_pd3dDevice, m_pImmediateContext,
+		L"Models\\Textures\\grass.png",
+		nullptr, &m_planeTexture);
 
 	m_World = DirectX::XMMatrixIdentity();
 
@@ -218,12 +228,12 @@ bool MyRender::Draw()
 	Update();              // старая камера + клавиатура
 	UpdateKatamari(dt);    // новая логика
 
-	RenderObject(m_planeVB, m_planeIB,
-		Matrix::Identity, m_planeIndexCount);
+	m_pImmediateContext->PSSetShaderResources(0, 1, &m_planeTexture);
+	m_pImmediateContext->PSSetSamplers(0, 1, &m_samplerState);
+	RenderObject(m_planeVB, m_planeIB, Matrix::Identity, m_planeIndexCount);
 
 	// --- шар ---
-	RenderObject(m_placeholders[0].vb, m_placeholders[0].ib,
-		m_ball.world, m_placeholders[0].indexCount);
+	RenderObject(m_ballMesh, m_ball.world);
 
 	// --- свободные + присоединённые объекты ---
 	for (auto& obj : m_objects)
@@ -316,10 +326,10 @@ void MyRender::RenderObject(MeshGPU mesh, Matrix world)
 	m_pImmediateContext->VSSetConstantBuffers(0, 1, &constantBuffer);
 
 	// Привязка вершинного и индексного буфера
-	UINT stride = sizeof(SimpleVertex);
+	UINT stride = sizeof(Vertex);
 	UINT offset = 0;
 	m_pImmediateContext->IASetVertexBuffers(0, 1, &mesh.vb, &stride, &offset);
-	m_pImmediateContext->IASetIndexBuffer(mesh.ib, DXGI_FORMAT_R16_UINT, 0);
+	m_pImmediateContext->IASetIndexBuffer(mesh.ib, DXGI_FORMAT_R32_UINT, 0);
 
 	// привязываем текстуру и сэмплер
 	m_pImmediateContext->PSSetShaderResources(0, 1, &mesh.texture);
@@ -385,128 +395,7 @@ void MyRender::Close()
 	_RELEASE(m_planetIB);
 }
 
-// Генерация сферы радиусом radius,
-// с количеством делений по широте (stacks) и долготе (slices)
-void MyRender::GenerateSphere(
-	float radius,
-	unsigned int slices,
-	unsigned int stacks,
-	std::vector<SimpleVertex>& outVertices,
-	std::vector<WORD>& outIndices)
-{
-	using namespace DirectX;
-
-	outVertices.clear();
-	outIndices.clear();
-
-	// Перебираем stacks (параллели) от 0 до stacks
-	// phi = угол от -90° (южный полюс) до +90° (северный)
-	for (unsigned int i = 0; i <= stacks; i++)
-	{
-		float phi = XM_PI * (float)i / (float)stacks - XM_PI / 2;
-		float y = radius * sinf(phi);       // от -R до +R
-		float r = radius * cosf(phi);       // «горизонтальный» радиус круга на данной широте
-
-		// Перебираем slices (долготы) от 0 до slices
-		// theta = угол от 0..2PI вокруг оси
-		for (unsigned int j = 0; j <= slices; j++)
-		{
-			float theta = 2.0f * XM_PI * (float)j / (float)slices;
-			float x = r * cosf(theta);
-			float z = r * sinf(theta);
-
-			// Добавим вершину
-			SimpleVertex v;
-			v.Pos = Vector3(x, y, z);
-			// Покрасим, например, в зависимости от phi, theta,
-			// или сделаем единый цвет. Для примера пусть будет
-			// что-то, зависящее от координат:
-			v.Color = Vector4(
-				(x / radius + 1.0f) * 0.5f,
-				(y / radius + 1.0f) * 0.5f,
-				(z / radius + 1.0f) * 0.5f,
-				1.0f
-			);
-			outVertices.push_back(v);
-		}
-	}
-
-	// Теперь генерируем индексы.
-	// Каждый «квадратик» на сфере составит 2 треугольника:
-	// stack шаг i, slice шаг j
-	unsigned int stride = slices + 1; // кол-во вершин в «строке»
-	for (unsigned int i = 0; i < stacks; i++)
-	{
-		for (unsigned int j = 0; j < slices; j++)
-		{
-			// Индексы четырёх углов «квадратика» (i, i+1 по вертикали; j, j+1 по горизонтали)
-			WORD i0 = (WORD)(i * stride + j);
-			WORD i1 = (WORD)(i * stride + j + 1);
-			WORD i2 = (WORD)((i + 1) * stride + j);
-			WORD i3 = (WORD)((i + 1) * stride + j + 1);
-
-			// 1) Треугольник (i0, i1, i2)
-			outIndices.push_back(i0);
-			outIndices.push_back(i1);
-			outIndices.push_back(i2);
-
-			// 2) Треугольник (i1, i3, i2)
-			outIndices.push_back(i1);
-			outIndices.push_back(i3);
-			outIndices.push_back(i2);
-		}
-	}
-}
-
 #include <random>
-
-//----------------------------------------------------------------------
-// 1.  Загружаем / генерируем простые меши-заглушки
-//----------------------------------------------------------------------
-void MyRender::LoadPlaceholderMeshes()
-{
-	// ---------- 1) Сфера (катамари и мелкие шарики) ----------
-	{
-		std::vector<SimpleVertex> v;
-		std::vector<WORD>         i;
-		GenerateSphere(1.0f, 16, 16, v, i);          // радиус 1
-
-		MeshGPU m;
-		m.vb = CreateVertexBuffer(v.data(), (UINT)v.size());
-		m.ib = CreateIndexBuffer(i.data(), (UINT)i.size());
-		m.indexCount = (UINT)i.size();
-		m.bsRadius = 1.0f;
-		m_placeholders.push_back(m);
-	}
-
-	// ---------- 2) Куб (коробки, ящики …) ----------
-	{
-		// упрощённый unit-cube (позиция + цвет)
-		const SimpleVertex verts[] =
-		{
-			{{-0.5f,-0.5f,-0.5f},{1,0,0,1}}, {{-0.5f, 0.5f,-0.5f},{0,1,0,1}},
-			{{ 0.5f, 0.5f,-0.5f},{0,0,1,1}}, {{ 0.5f,-0.5f,-0.5f},{1,1,0,1}},
-			{{-0.5f,-0.5f, 0.5f},{1,0,1,1}}, {{-0.5f, 0.5f, 0.5f},{0,1,1,1}},
-			{{ 0.5f, 0.5f, 0.5f},{1,1,1,1}}, {{ 0.5f,-0.5f, 0.5f},{0,0,0,1}}
-		};
-		const WORD idx[] =
-		{
-			0,1,2, 0,2,3,   // -Z
-			4,6,5, 4,7,6,   // +Z
-			4,5,1, 4,1,0,   // -X
-			3,2,6, 3,6,7,   // +X
-			1,5,6, 1,6,2,   // +Y
-			4,0,3, 4,3,7    // -Y
-		};
-
-		MeshGPU m;
-		m.vb = CreateVertexBuffer(verts, _countof(verts));
-		m.ib = CreateIndexBuffer(idx, _countof(idx));
-		m.indexCount = _countof(idx);
-		m.bsRadius = 0.8660254f;
-		m_placeholders.push_back(m);
-	}
-}
 
 //----------------------------------------------------------------------
 // 2.  Случайно наполняем сцену объектами-«мусором»
@@ -602,9 +491,11 @@ void MyRender::UpdateKatamari(float dt)
 	}
 
 	// 6) собираем world-матрицу
-	m_ball.world =
-		Matrix::CreateFromQuaternion(m_ball.orientation)
-		* Matrix::CreateTranslation(m_ball.bs.Center);
+	float scale = m_ball.bs.Radius / m_ballMesh.bsRadius;
+m_ball.world =
+    Matrix::CreateScale(scale) *
+    Matrix::CreateFromQuaternion(m_ball.orientation) *
+    Matrix::CreateTranslation(m_ball.bs.Center);
 
 
 
