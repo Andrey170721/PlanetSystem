@@ -2,6 +2,8 @@
 #include <d3dcompiler.h>
 #include "WICTextureLoader.h"
 #include "ModelLoader.h"
+#include <DirectXMath.h>
+using namespace DirectX;
 
 static auto previousTime = std::chrono::high_resolution_clock::now();
 
@@ -180,6 +182,10 @@ m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
 	ModelLoader loader(m_pd3dDevice, m_pImmediateContext);
 
 	auto barrel = loader.LoadModel(L"Models\\Barrel_FBX.fbx", L"Models\\Textures\\barrel_BaseColor.png");
+	//auto chair = loader.LoadModel(L"Models\\old_chair.fbx", L"Models\\Textures\\old_chair_bcolor.png");
+	//auto pic_table = loader.LoadModel(L"Models\\picnic_table.fbx", L"Models\\Textures\\picnic_table_mat_bcolor.png");
+	//auto sword = loader.LoadModel(L"Models\\SlothSword.fbx", L"Models\\Textures\\Material_BaseColor.png");
+	auto table = loader.LoadModel(L"Models\\table.fbx", L"Models\\Textures\\wooden_top_bcolor.png");
 
 	auto ballMesh = loader.LoadModel(
 		L"Models\\soccer_ball.fbx",
@@ -188,8 +194,16 @@ m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
 	m_ballMesh = ballMesh;
 
 	barrel.sampler = m_samplerState;  // привязываем сэмплер
+	//chair.sampler = m_samplerState;
+	//pic_table.sampler = m_samplerState;
+	//sword.sampler = m_samplerState;
+	table.sampler = m_samplerState;
 
 	m_modelPool.push_back(barrel);
+	//m_modelPool.push_back(chair);
+	//m_modelPool.push_back(pic_table);
+	//m_modelPool.push_back(sword);
+	m_modelPool.push_back(table);
 
 	DirectX::CreateWICTextureFromFile(
 		m_pd3dDevice, m_pImmediateContext,
@@ -212,7 +226,7 @@ m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
 	lb.dirLight.direction = { -0.5f, -1.0f, -0.3f };
 	lb.dirLight.color = { 1.0f, 1.0f, 1.0f };
 
-	// материал бочки/шара:
+	// материалы:
 	lb.mat.ambient = { 0.1f, 0.1f, 0.1f };
 	lb.mat.diffuse = { 1.0f, 1.0f, 1.0f };
 	lb.mat.specular = { 1.0f, 1.0f, 1.0f };
@@ -432,7 +446,7 @@ void MyRender::Close()
 void MyRender::SpawnScene() {
 	std::mt19937 rng{ std::random_device{}() };
 	std::uniform_real_distribution<float> posDist(-50.f, 50.f);
-	std::uniform_real_distribution<float> sclDist(0.5f, 1.5f);
+	std::uniform_real_distribution<float> sclDist(0.3f, 0.8f);
 	std::uniform_int_distribution<int>    meshDist(0, (int)m_modelPool.size() - 1);
 
 	const int objectCount = 150;
@@ -450,10 +464,13 @@ void MyRender::SpawnScene() {
 
 		obj.bs = DirectX::BoundingSphere(Vector3::Zero, obj.mesh.bsRadius * scale);
 		float y = obj.bs.Radius;
-		obj.local = Matrix::CreateScale(scale) *
-			Matrix::CreateTranslation(x, y, z);
-		obj.attached = false;
 
+		auto rot = Matrix::CreateRotationX(-XM_PIDIV2);
+
+		obj.local = Matrix::CreateScale(scale) * rot *
+			Matrix::CreateTranslation(x, y, z);
+
+		obj.attached = false;
 		m_objects.push_back(obj);
 	}
 }
@@ -519,26 +536,23 @@ void MyRender::UpdateKatamari(float dt)
 		m_ball.orientation.Normalize();
 	}
 
-	// 6) собираем world-матрицу
-	float scale = m_ball.bs.Radius / m_ballMesh.bsRadius;
-m_ball.world =
-    Matrix::CreateScale(scale) *
-    Matrix::CreateFromQuaternion(m_ball.orientation) *
-    Matrix::CreateTranslation(m_ball.bs.Center);
+	// 6) собираем world-матрицу без изменения размера шара
+	float constantScale = m_ball.visualRadius / m_ballMesh.bsRadius;
+	m_ball.world =
+		Matrix::CreateScale(constantScale) *
+		Matrix::CreateFromQuaternion(m_ball.orientation) *
+		Matrix::CreateTranslation(m_ball.bs.Center);
 
 
 
-	// 7) коллизии (как было), но радиус теперь внутри m_ball.bs.Radius
+	// 7) коллизии: прилипают любые объекты при пересечении
 	for (auto& obj : m_objects)
 	{
 		if (obj.attached) continue;
 		DirectX::BoundingSphere objBS = obj.bs;
 		objBS.Transform(objBS, obj.local);
-		if (objBS.Intersects(m_ball.bs) &&
-			objBS.Radius <= m_ball.bs.Radius + 0.05f)
-		{
+		if (objBS.Intersects(m_ball.bs))
 			Attach(obj);
-		}
 	}
 
 	// 8) обновляем цель камеры
@@ -551,16 +565,19 @@ m_ball.world =
 //----------------------------------------------------------------------
 void MyRender::Attach(GameObject& obj)
 {
+	// 1. Отмечаем, что объект приклеен
 	obj.attached = true;
-
-	// переводим объект в пространство шара
-	obj.local = obj.local * Matrix::CreateTranslation(-m_ball.bs.Center.x,
-		-m_ball.bs.Center.y,
-		-m_ball.bs.Center.z
-	);
+	
+	// 2. Вычисляем обратную матрицу мира шара
+	//    (в SimpleMath есть метод Invert()):
+	Matrix invBallWorld = m_ball.world.Invert();
+	
+	// 3. Переводим текущую world-матрицу объекта
+	//    в локальные координаты шара
+	obj.local = obj.local * invBallWorld;
 
 	// растим катамари
-	m_ball.bs.Radius += obj.bs.Radius * m_ball.growRate;
+	//m_ball.bs.Radius += obj.bs.Radius * m_ball.growRate;
 
 	// поднять центр, пересобрать world-матрицу
 	/*m_ball.bs.Center.y = m_ball.bs.Radius;

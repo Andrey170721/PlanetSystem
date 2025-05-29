@@ -98,10 +98,9 @@ void ModelLoader::ProcessMesh(aiMesh* mesh,
 
 float ModelLoader::CalculateBoundingSphere(const std::vector<Vertex>& verts) {
     DirectX::XMFLOAT3 center{ 0,0,0 };
-    // простой способ: взять мельшую гранулу вокруг начала
     float maxD2 = 0;
     for (auto& v : verts) {
-        float d2 = v.Pos.x * v.Pos.x + v.Pos.y * v.Pos.y + v.Pos.z * v.Pos.z;
+        float d2 = (v.Pos.x * v.Pos.x + v.Pos.y * v.Pos.y + v.Pos.z * v.Pos.z);
         if (d2 > maxD2) maxD2 = d2;
     }
     return sqrtf(maxD2);
