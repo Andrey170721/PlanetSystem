@@ -52,6 +52,13 @@ struct LightBufferType
 	// 112 + 1024 = **1136**
 };
 
+struct ShadowBufferType
+{
+	Matrix lightViewProj;
+	float  shadowBias;
+	float  pad[3];
+};
+
 class MyRender : public Render
 {
 public:
@@ -128,4 +135,17 @@ private:
 
 	ID3D11Buffer* m_lightBuffer = nullptr;
 	LightBufferType lb = {};
+
+	ID3D11Texture2D* m_shadowTex = nullptr;
+	ID3D11DepthStencilView* m_shadowDSV = nullptr;
+	ID3D11ShaderResourceView* m_shadowSRV = nullptr;
+	D3D11_VIEWPORT             m_shadowVP = {};
+	DirectX::XMMATRIX m_lightViewProj = DirectX::XMMatrixIdentity();
+	ID3D11SamplerState* m_shadowSampler = nullptr;
+	ID3D11Buffer* m_shadowCB = nullptr;
+	ID3D11VertexShader* m_pShadowVS = nullptr;
+	ID3D11RenderTargetView* m_backRTV = nullptr;
+	ID3D11DepthStencilView* m_backDSV = nullptr;
+	D3D11_VIEWPORT          m_backVP = {};
+
 };

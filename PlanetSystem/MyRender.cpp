@@ -186,6 +186,49 @@ bool MyRender::Init(HWND hwnd)
 	sd.MaxLOD = D3D11_FLOAT32_MAX;
 	m_pd3dDevice->CreateSamplerState(&sd, &m_samplerState);
 
+	// 1) shadow texture 1024×1024
+	D3D11_TEXTURE2D_DESC td = {};
+	td.Width = 1024;
+	td.Height = 1024;
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_R24G8_TYPELESS;
+	td.SampleDesc.Count = 1;
+	td.Usage = D3D11_USAGE_DEFAULT;
+	td.BindFlags = D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_SHADER_RESOURCE;
+	m_pd3dDevice->CreateTexture2D(&td, nullptr, &m_shadowTex);
+
+	// 2) DSV
+	D3D11_DEPTH_STENCIL_VIEW_DESC dsvd = {};
+	dsvd.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	dsvd.ViewDimension = D3D11_DSV_DIMENSION_TEXTURE2D;
+	m_pd3dDevice->CreateDepthStencilView(m_shadowTex, &dsvd, &m_shadowDSV);
+
+	// 3) SRV
+	D3D11_SHADER_RESOURCE_VIEW_DESC srvd = {};
+	srvd.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+	srvd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvd.Texture2D.MipLevels = 1;
+	m_pd3dDevice->CreateShaderResourceView(m_shadowTex, &srvd, &m_shadowSRV);
+
+	// 4) viewport
+	m_shadowVP.TopLeftX = m_shadowVP.TopLeftY = 0;
+	m_shadowVP.Width = 1024;
+	m_shadowVP.Height = 1024;
+	m_shadowVP.MinDepth = 0;
+	m_shadowVP.MaxDepth = 1;
+
+	// 5) comparison sampler for shadow look-up
+	D3D11_SAMPLER_DESC sdCmp = {};
+	sdCmp.Filter = D3D11_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+	sdCmp.AddressU = sdCmp.AddressV = sdCmp.AddressW = D3D11_TEXTURE_ADDRESS_BORDER;
+	sdCmp.BorderColor[0] = sdCmp.BorderColor[1] = sdCmp.BorderColor[2] = 1;
+	sdCmp.BorderColor[3] = 1;
+	sdCmp.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+	m_pd3dDevice->CreateSamplerState(&sdCmp, &m_shadowSampler);
+
+
+
 	// Загружаем пул моделей
 	ModelLoader loader(m_pd3dDevice, m_pImmediateContext);
 
@@ -283,52 +326,111 @@ bool MyRender::Init(HWND hwnd)
 
 bool MyRender::Draw()
 {
-	// получаем камеру из вашего OrbitCamera
+	//------------------------------------------------------------------
+	// 1.  Построить матрицу света (ортографическая «камера»)
+	//------------------------------------------------------------------
+	Vector3 lightDir = Vector3(lb.dirLight.direction);   // уже нормализована
+	Vector3 lightPos = m_ball.bs.Center - lightDir * 30.0f;
+	Matrix  lightView = Matrix::CreateLookAt(lightPos, m_ball.bs.Center, Vector3::UnitY);
+	Matrix  lightProj = Matrix::CreateOrthographic(60, 60, 0.1f, 100.0f);
+	m_lightViewProj = lightView * lightProj;
+
+	//------------------------------------------------------------------
+	// 2.  DEPTH-PASS  ➜  пишем карту теней в m_shadowDSV
+	//------------------------------------------------------------------
+	// 2.1  открепляем SRV, иначе «ресурс всё ещё привязан» при записи
+	ID3D11ShaderResourceView* nullSRV = nullptr;
+	m_pImmediateContext->PSSetShaderResources(1, 1, &nullSRV);
+
+	// 2.2  задаём viewport 1024×1024 и RTV = nullptr, DSV = shadow
+	m_pImmediateContext->RSSetViewports(1, &m_shadowVP);
+	ID3D11RenderTargetView* nullRTV = nullptr;
+	m_pImmediateContext->OMSetRenderTargets(1, &nullRTV, m_shadowDSV);
+	m_pImmediateContext->ClearDepthStencilView(m_shadowDSV,
+		D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+	// 2.3  depth-only шейдер: только VS
+	m_pImmediateContext->VSSetShader(m_pShadowVS, nullptr, 0);
+	m_pImmediateContext->PSSetShader(nullptr, nullptr, 0);
+
+	// 2.4  рисуем всю геометрию (без текстур)
+	RenderObject(m_planeVB, m_planeIB, Matrix::Identity, m_planeIndexCount);
+	RenderObject(m_ballMesh, m_ball.world);
+	for (auto& obj : m_objects)
+		RenderObject(obj.mesh, obj.attached ? obj.local * m_ball.world : obj.local);
+
+	//------------------------------------------------------------------
+	// 3.  ВОЗВРАЩАЕМСЯ  к основному back-buffer’у и обычному viewport’у
+	//------------------------------------------------------------------
+	m_pImmediateContext->OMSetRenderTargets(1, &m_backRTV, m_backDSV);
+	m_pImmediateContext->RSSetViewports(1, &m_backVP);
+
+	const float clear[4] = { 0.05f, 0.1f, 0.15f, 1.0f };
+	m_pImmediateContext->ClearRenderTargetView(m_backRTV, clear);
+	m_pImmediateContext->ClearDepthStencilView(m_backDSV,
+		D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL, 1.0f, 0);
+
+	//------------------------------------------------------------------
+	// 4.  Обновляем CB-2 (shadow) и привязываем ресурсы
+	//------------------------------------------------------------------
+	ShadowBufferType sbuf = {};
+	sbuf.lightViewProj = XMMatrixTranspose(m_lightViewProj);
+	sbuf.shadowBias = 0.002f;
+	m_pImmediateContext->UpdateSubresource(m_shadowCB, 0, nullptr, &sbuf, 0, 0);
+
+	m_pImmediateContext->VSSetConstantBuffers(2, 1, &m_shadowCB);
+	m_pImmediateContext->PSSetConstantBuffers(2, 1, &m_shadowCB);
+	m_pImmediateContext->PSSetShaderResources(1, 1, &m_shadowSRV);
+	m_pImmediateContext->PSSetSamplers(1, 1, &m_shadowSampler);
+
+	//------------------------------------------------------------------
+	// 5.  Обновляем CB-1 (свет, точечные лампы)
+	//------------------------------------------------------------------
 	auto camPos = g_orbitCam.GetPosition();
 	lb.viewPos = DirectX::XMFLOAT3(camPos.x, camPos.y, camPos.z);
 
-	XMFLOAT3 ball = { m_ball.bs.Center.x,
-				  m_ball.bs.Center.y,
-				  m_ball.bs.Center.z };
-
+	XMFLOAT3 ball = { m_ball.bs.Center.x, m_ball.bs.Center.y, m_ball.bs.Center.z };
 	for (int i = 0; i < lb.pointCount; ++i)
 	{
 		float ang = XM_2PI * i / lb.pointCount;
-		float ringR = m_ball.visualRadius * 2.0f;        // радиус кольца огней
+		float ringR = m_ball.visualRadius * 2.0f;
 		lb.pLights[i].position = {
 			ball.x + cosf(ang) * ringR,
-			ball.y + 0.3f,                               // чуть выше пола
+			ball.y + 0.3f,
 			ball.z + sinf(ang) * ringR
 		};
 	}
-
-	// записываем в GPU
 	m_pImmediateContext->UpdateSubresource(m_lightBuffer, 0, nullptr, &lb, 0, 0);
-
-	// привязываем в слот b1
 	m_pImmediateContext->PSSetConstantBuffers(1, 1, &m_lightBuffer);
 
-	float dt = CalculateDeltaTime();
-	Update();              // старая камера + клавиатура
-	UpdateKatamari(dt);    // новая логика
+	//------------------------------------------------------------------
+	// 6.  Переключаем обычные VS/PS и рисуем финальную картинку
+	//------------------------------------------------------------------
+	m_pImmediateContext->VSSetShader(m_pVertexShader, nullptr, 0);
+	m_pImmediateContext->PSSetShader(m_pPixelShader, nullptr, 0);
 
+	float dt = CalculateDeltaTime();
+	Update();
+	UpdateKatamari(dt);
+
+	// плоскость
 	m_pImmediateContext->PSSetShaderResources(0, 1, &m_planeTexture);
 	m_pImmediateContext->PSSetSamplers(0, 1, &m_samplerState);
-	m_pImmediateContext->PSSetShader(m_pPixelShader, nullptr, 0);
 	RenderObject(m_planeVB, m_planeIB, Matrix::Identity, m_planeIndexCount);
 
-	// --- шар ---
+	// шар
 	RenderObject(m_ballMesh, m_ball.world);
 
-	// --- свободные + присоединённые объекты ---
+	// все остальные объекты
 	for (auto& obj : m_objects)
 	{
-		const Matrix world = obj.attached ? obj.local * m_ball.world
-			: obj.local;
+		Matrix world = obj.attached ? obj.local * m_ball.world : obj.local;
 		RenderObject(obj.mesh, world);
 	}
+
 	return true;
 }
+
 
 void MyRender::Update()
 {

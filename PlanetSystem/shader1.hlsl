@@ -1,4 +1,3 @@
-
 #define MAX_POINT_LIGHTS 32
 
 struct PointLight
@@ -39,8 +38,17 @@ cbuffer LightBuffer : register(b1)
     PointLight pLights[MAX_POINT_LIGHTS];
 };
 
+cbuffer ShadowBuffer : register(b2)
+{
+    float4x4 lightViewProj;
+    float shadowBias;
+    float3 _pad;
+};
+
 Texture2D diffuseMap : register(t0);
+Texture2D shadowTex : register(t1);
 SamplerState sampLinear : register(s0);
+SamplerComparisonState shadowSamp : register(s1);
 
 struct VS_IN
 {
@@ -55,32 +63,41 @@ struct VS_OUT
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
     float3 worldPos : TEXCOORD1;
+    float4 lightPos : TEXCOORD2;
 };
 
 VS_OUT VSMain(VS_IN IN)
 {
     VS_OUT OUT;
-
     float4 wPos = mul(float4(IN.pos, 1.0f), world);
     OUT.worldPos = wPos.xyz;
-    OUT.normal = mul(IN.normal, (float3x3) world);
-
     OUT.svPos = mul(wPos, view);
     OUT.svPos = mul(OUT.svPos, projection);
 
+    OUT.normal = mul(IN.normal, (float3x3) world);
     OUT.uv = IN.uv;
+    OUT.lightPos = mul(wPos, lightViewProj);
+
     return OUT;
 }
 
 float4 PSMain(VS_OUT IN) : SV_TARGET
 {
-    float3 albedo = diffuseMap.Sample(sampLinear, IN.uv).rgb;
     float3 N = normalize(IN.normal);
-    float3 color = 0.0f;
+    float3 V = normalize(viewPos - IN.worldPos);
+    float3 albedo = diffuseMap.Sample(sampLinear, IN.uv).rgb;
+    float3 color = albedo * matAmbient;
 
     float3 Ld = normalize(-dirLightDir);
     float NdotL = saturate(dot(N, Ld));
-    color += albedo * dirLightColor * NdotL;
+    float3 diff = albedo * dirLightColor * NdotL;
+
+    float3 cp = IN.lightPos.xyz / IN.lightPos.w;
+    float2 shadowUV = cp.xy * 0.5f + 0.5f;
+    float shadowDepth = cp.z;
+    float visibility = shadowTex.SampleCmpLevelZero(shadowSamp, shadowUV, shadowDepth - shadowBias);
+    diff *= visibility;
+    color += diff;
 
     [loop]
     for (int i = 0; i < pointCount; ++i)
@@ -95,7 +112,10 @@ float4 PSMain(VS_OUT IN) : SV_TARGET
         color += albedo * pLights[i].color * pLights[i].intensity * lambert * atten;
     }
 
-    color += albedo * 0.1f;
-
     return float4(color, 1.0f);
+}
+
+float4 VSDepthOnly(float3 pos : POSITION) : SV_POSITION
+{
+    return mul(mul(float4(pos, 1), world), lightViewProj);
 }
