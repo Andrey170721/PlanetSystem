@@ -11,6 +11,8 @@
 #include <vector>
 #include <chrono>
 
+constexpr int MAX_POINT_LIGHTS = 32;
+
 using namespace D3D11Framework;
 using namespace DirectX::SimpleMath;
 struct SimpleVertex;
@@ -31,11 +33,23 @@ struct Material {
 	float              specPower;
 };
 
-struct LightBufferType {
-	Light          dirLight;
-	Material       mat;
-	DirectX::XMFLOAT3 viewPos;
-	float             pad3;
+struct PointLight
+{
+	DirectX::XMFLOAT3 position; float range;      // (w) Ц радиус затухани€
+	DirectX::XMFLOAT3 color;    float intensity;  // (w) Ц сила
+};
+
+struct LightBufferType
+{
+	Light             dirLight;   // 32
+	Material          mat;        // 48
+	DirectX::XMFLOAT3 viewPos; float pad0;  // 16  ?  96
+
+	int               pointCount;
+	float             padPoint[3];          // добиваем до 16  ? 112
+
+	PointLight        pLights[MAX_POINT_LIGHTS]; // 32*32 = 1024
+	// 112 + 1024 = **1136**
 };
 
 class MyRender : public Render
@@ -54,6 +68,7 @@ public:
 	ID3D11Buffer* CreateVertexBuffer(const SimpleVertex* vertices, UINT vertexCount);
 	ID3D11Buffer* CreateIndexBuffer(const WORD* indices, UINT indexCount);
 	void Close();
+	DirectX::XMFLOAT3 HSVtoRGB(const DirectX::XMFLOAT3& hsv);
 
 	void GenerateSphere(float radius, unsigned int slices, unsigned int stacks, std::vector<SimpleVertex>& outVertices, std::vector<WORD>& outIndices);
 

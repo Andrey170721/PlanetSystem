@@ -33,4 +33,9 @@ struct KatamariBall
     float          growRate = 0.1f;   // во сколько радиус растёт при “поедании”
     float          visualRadius = 5.0f; // фикс. визуальный радиус
     Quaternion     orientation = Quaternion::Identity;
+
+    float  yVelocity = 0.0f;   // текущая вертик. скорость
+    int    jumpsRemaining = 2;      // 2 ? двойной прыжок
+    bool   apexWindowActive = false;  // окно для 2-го прыжка
+    float  apexTimer = 0.0f;   // таймер окна
 };

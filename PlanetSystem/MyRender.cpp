@@ -106,7 +106,7 @@ bool MyRender::Init(HWND hwnd)
 {
 	HRESULT hr = S_OK;
 	ID3DBlob* pVSBlob = NULL;
-	hr = m_compileshaderfromfile(L"shader.hlsl", "VSMain", "vs_5_0", &pVSBlob);
+	hr = m_compileshaderfromfile(L"shader1.hlsl", "VSMain", "vs_5_0", &pVSBlob);
 	if (FAILED(hr))
 	{
 		Log::Get()->Err("Невозможно скомпилировать файл shader.hlsl");
@@ -136,7 +136,7 @@ bool MyRender::Init(HWND hwnd)
 	m_pImmediateContext->IASetInputLayout(m_pVertexLayout);
 
 	ID3DBlob* pPSBlob = NULL;
-	hr = m_compileshaderfromfile(L"shader.hlsl", "PSMain", "ps_5_0", &pPSBlob);
+	hr = m_compileshaderfromfile(L"shader1.hlsl", "PSMain", "ps_5_0", &pPSBlob);
 	if (FAILED(hr))
 	{
 		Log::Get()->Err("Невозможно скомпилировать файл shader.hlsl");
@@ -160,12 +160,20 @@ bool MyRender::Init(HWND hwnd)
 	m_pd3dDevice->CreateBuffer(&cbDesc, nullptr, &constantBuffer);
 
 	// создаём буфер для LightBufferType
-D3D11_BUFFER_DESC lbDesc = {};
-lbDesc.Usage          = D3D11_USAGE_DEFAULT;
-lbDesc.ByteWidth      = sizeof(LightBufferType);
-lbDesc.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
-lbDesc.CPUAccessFlags = 0;
-m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
+	D3D11_BUFFER_DESC lbDesc = {};
+	lbDesc.Usage = D3D11_USAGE_DEFAULT;
+	lbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+	// гарантированно кратно 16
+	lbDesc.ByteWidth = sizeof(LightBufferType);          // теперь 1136
+	lbDesc.ByteWidth = (lbDesc.ByteWidth + 15) & ~15;    // запас на всякий случай
+
+	hr = m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
+	if (FAILED(hr))
+	{
+		MessageBoxA(hwnd, "Failed to create light constant buffer", "D3D11 error", MB_OK);
+		return false;
+	}
 
 	// —– создаём линейный сэмплер для текстур —–
 	D3D11_SAMPLER_DESC sd = {};
@@ -226,6 +234,20 @@ m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
 	lb.dirLight.direction = { -0.5f, -1.0f, -0.3f };
 	lb.dirLight.color = { 1.0f, 1.0f, 1.0f };
 
+	lb.pointCount = MAX_POINT_LIGHTS;
+	for (int i = 0; i < MAX_POINT_LIGHTS; ++i)
+	{
+		float ang = XM_2PI * i / MAX_POINT_LIGHTS;
+		lb.pLights[i].range = 1.2f;
+		lb.pLights[i].intensity = 1.0f;
+
+		// пастельная «радуга» вокруг мяча
+		DirectX::XMFLOAT3 hsv = DirectX::XMFLOAT3(i / (float)MAX_POINT_LIGHTS, 0.6f, 1.0f);
+		DirectX::XMFLOAT3 rgb = HSVtoRGB(hsv);
+		lb.pLights[i].color = { rgb.x, rgb.y, rgb.z };
+	}
+
+
 	// материалы:
 	lb.mat.ambient = { 0.1f, 0.1f, 0.1f };
 	lb.mat.diffuse = { 1.0f, 1.0f, 1.0f };
@@ -243,6 +265,11 @@ m_pd3dDevice->CreateBuffer(&lbDesc, nullptr, &m_lightBuffer);
 	m_ball.bs = DirectX::BoundingSphere(Vector3(0, m_ball.visualRadius, 0),
 		m_ball.visualRadius);
 
+	m_ball.yVelocity = 0.0f;
+	m_ball.jumpsRemaining = 2;
+	m_ball.apexWindowActive = false;
+	m_ball.apexTimer = 0.0f;
+
 	// ориентация по умолчанию
 	m_ball.orientation = Quaternion::Identity;
 
@@ -259,6 +286,21 @@ bool MyRender::Draw()
 	// получаем камеру из вашего OrbitCamera
 	auto camPos = g_orbitCam.GetPosition();
 	lb.viewPos = DirectX::XMFLOAT3(camPos.x, camPos.y, camPos.z);
+
+	XMFLOAT3 ball = { m_ball.bs.Center.x,
+				  m_ball.bs.Center.y,
+				  m_ball.bs.Center.z };
+
+	for (int i = 0; i < lb.pointCount; ++i)
+	{
+		float ang = XM_2PI * i / lb.pointCount;
+		float ringR = m_ball.visualRadius * 2.0f;        // радиус кольца огней
+		lb.pLights[i].position = {
+			ball.x + cosf(ang) * ringR,
+			ball.y + 0.3f,                               // чуть выше пола
+			ball.z + sinf(ang) * ringR
+		};
+	}
 
 	// записываем в GPU
 	m_pImmediateContext->UpdateSubresource(m_lightBuffer, 0, nullptr, &lb, 0, 0);
@@ -480,84 +522,126 @@ void MyRender::SpawnScene() {
 //----------------------------------------------------------------------
 void MyRender::UpdateKatamari(float dt)
 {
-	// 1) получаем WASD
+	// ───────────────────────────────────────────────────────
+	// 0. Ввод: детектируем нажатие «пробел» по фронту
+	// ───────────────────────────────────────────────────────
+	static bool prevSpace = false;
+	bool  spaceNow = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+	bool  spaceEdge = spaceNow && !prevSpace;   // нажат прямо сейчас
+	prevSpace = spaceNow;
+
+	// ───────── константы «физики» (подберите по вкусу) ────────
+	const float g = -25.0f;   // ускорение свободного падения
+	const float jumpImpulse = 10.0f;    // начальная V-y прыжка
+	const float apexWindow = 0.25f;    // время, когда разрешён 2-ой прыжок
+
+	// ───────────────────────────────────────────────────────
+	// 1. Горизонтальное движение (как было раньше)
+	// ───────────────────────────────────────────────────────
 	float forward = 0, strafe = 0;
 	if (GetAsyncKeyState('W') & 0x8000) forward += 1;
 	if (GetAsyncKeyState('S') & 0x8000) forward -= 1;
 	if (GetAsyncKeyState('A') & 0x8000) strafe -= 1;
 	if (GetAsyncKeyState('D') & 0x8000) strafe += 1;
 
-	// 2) вычисляем локальные векторы камеры
 	Vector3 camPos = g_orbitCam.GetPosition();
-	Vector3 toBall = m_ball.bs.Center - camPos;
-	toBall.y = 0;
+	Vector3 toBall = m_ball.bs.Center - camPos;  toBall.y = 0;
 	if (toBall.LengthSquared() > 0) toBall.Normalize();
 
-	// создаём «вверх» и «вперёд» векторы
-	Vector3 up(0.0f, 1.0f, 0.0f);
-	Vector3 forwardVec = toBall;  // уже нормализован
+	Vector3 rightVec = Vector3::UnitY.Cross(toBall);  rightVec.Normalize();
 
-	Vector3 rightVec = up.Cross(forwardVec);
-	rightVec.Normalize();
-
-	// 3) итоговый вектор движения
 	Vector3 move = toBall * forward + rightVec * strafe;
-	if (move.LengthSquared() > 0) move.Normalize();
-	move *= m_moveSpeed * dt;
+	if (move.LengthSquared() > 0) { move.Normalize(); move *= m_moveSpeed * dt; }
 
-	// 4) сдвигаем центр шарика (коллизии)
 	m_ball.bs.Center.x += move.x;
 	m_ball.bs.Center.z += move.z;
-	m_ball.bs.Center.y = m_ball.visualRadius;
 
-	// 5) считаем ролл-вращение
+	// ───────────────────────────────────────────────────────
+	// 2. Прыжки и вертикальная физика
+	// ───────────────────────────────────────────────────────
+	// 2.1 Запрос прыжка
+	if (spaceEdge)
+	{
+		bool grounded = (m_ball.bs.Center.y <= m_ball.visualRadius + 0.001f);
+
+		if (grounded && m_ball.jumpsRemaining == 2)          // 1-ый прыжок
+		{
+			m_ball.yVelocity = jumpImpulse;
+			m_ball.jumpsRemaining = 1;
+		}
+		else if (m_ball.apexWindowActive && m_ball.jumpsRemaining == 1) // 2-ой
+		{
+			m_ball.yVelocity = jumpImpulse;
+			m_ball.jumpsRemaining = 0;
+			m_ball.apexWindowActive = false;
+		}
+	}
+
+	// 2.2 Применяем гравитацию
+	m_ball.yVelocity += g * dt;
+	m_ball.bs.Center.y += m_ball.yVelocity * dt;
+
+	// 2.3 Детект апекса (смена направления движения вверх/вниз)
+	if (!m_ball.apexWindowActive && m_ball.jumpsRemaining == 1 &&
+		m_ball.yVelocity <= 0.0f)      // достиг вершины
+	{
+		m_ball.apexWindowActive = true;
+		m_ball.apexTimer = 0.0f;
+	}
+
+	// 2.4 Отсчитываем окно для второго прыжка
+	if (m_ball.apexWindowActive)
+	{
+		m_ball.apexTimer += dt;
+		if (m_ball.apexTimer > apexWindow)
+			m_ball.apexWindowActive = false;
+	}
+
+	// 2.5 Столкновение с землёй
+	if (m_ball.bs.Center.y < m_ball.visualRadius)
+	{
+		m_ball.bs.Center.y = m_ball.visualRadius;
+		m_ball.yVelocity = 0.0f;
+		m_ball.jumpsRemaining = 2;          // снова разрешены оба прыжка
+		m_ball.apexWindowActive = false;
+	}
+
+	// ───────────────────────────────────────────────────────
+	// 3. Вращение катамари и world-матрица (как было)
+	// ───────────────────────────────────────────────────────
 	if (move.LengthSquared() > 0.0f)
 	{
-		Vector3 moveDir = move;
-		moveDir.Normalize();
+		Vector3 moveDir = move;  moveDir.Normalize();
+		Vector3 spinAxis = Vector3::UnitY.Cross(moveDir);   spinAxis.Normalize();
 
-		// Задаём вектор «вверх»
-		Vector3 up(0, 1, 0);
-
-		// Ось вращения = up × moveDir  (не moveDir × up!)
-		Vector3 spinAxis = up.Cross(moveDir);
-		if (spinAxis.LengthSquared() > 0.0f)
-			spinAxis.Normalize();
-
-		// Пройденное расстояние = |move|, угол = distance / R
-		float travel = move.Length();
-		float spinAngle = travel / m_ball.visualRadius; // в радианах
-
-		// Дельта-кватернион по оси spinAxis
+		float spinAngle = move.Length() / m_ball.visualRadius;
 		Quaternion delta = Quaternion::CreateFromAxisAngle(spinAxis, spinAngle);
 
-		// Накручиваем новое вращение *после* старого
 		m_ball.orientation = m_ball.orientation * delta;
 		m_ball.orientation.Normalize();
 	}
 
-	// 6) собираем world-матрицу без изменения размера шара
 	float constantScale = m_ball.visualRadius / m_ballMesh.bsRadius;
 	m_ball.world =
 		Matrix::CreateScale(constantScale) *
 		Matrix::CreateFromQuaternion(m_ball.orientation) *
 		Matrix::CreateTranslation(m_ball.bs.Center);
 
-
-
-	// 7) коллизии: прилипают любые объекты при пересечении
+	// ───────────────────────────────────────────────────────
+	// 4. «Приклеиваем» объекты (без изменений)
+	// ───────────────────────────────────────────────────────
 	for (auto& obj : m_objects)
 	{
 		if (obj.attached) continue;
-		DirectX::BoundingSphere objBS = obj.bs;
-		objBS.Transform(objBS, obj.local);
+		BoundingSphere objBS = obj.bs;  objBS.Transform(objBS, obj.local);
 		if (objBS.Intersects(m_ball.bs))
 			Attach(obj);
 	}
 
-	// 8) обновляем цель камеры
+	// камера продолжает следить за центром мяча
 	g_orbitCam.SetTarget(m_ball.bs.Center);
 }
+
 
 
 //----------------------------------------------------------------------
@@ -583,4 +667,26 @@ void MyRender::Attach(GameObject& obj)
 	/*m_ball.bs.Center.y = m_ball.bs.Radius;
 	m_ball.world = Matrix::CreateScale(m_ball.bs.Radius) *
 		Matrix::CreateTranslation(m_ball.bs.Center);*/
+}
+
+DirectX::XMFLOAT3 MyRender::HSVtoRGB(const DirectX::XMFLOAT3& hsv)
+{
+	float H = hsv.x * 360.0f;  // [0,1] → [0,360]
+	float S = hsv.y;
+	float V = hsv.z;
+
+	float C = V * S;
+	float X = C * (1.0f - fabsf(fmodf(H / 60.0f, 2.0f) - 1.0f));
+	float m = V - C;
+
+	float r, g, b;
+
+	if (H < 60) { r = C; g = X; b = 0; }
+	else if (H < 120) { r = X; g = C; b = 0; }
+	else if (H < 180) { r = 0; g = C; b = X; }
+	else if (H < 240) { r = 0; g = X; b = C; }
+	else if (H < 300) { r = X; g = 0; b = C; }
+	else { r = C; g = 0; b = X; }
+
+	return XMFLOAT3(r + m, g + m, b + m);
 }

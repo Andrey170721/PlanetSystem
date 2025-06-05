@@ -1,28 +1,19 @@
-﻿// Katamari lighting shader (ASCII‑only)
-// =====================================
-// * VS: VSMain, PS: PSMain
-// * Input  : POSITION, NORMAL, TEXCOORD
-// * CB b0  : world / view / projection matrices
-// * CB b1  : directional + array of point lights
-// * Tex t0 : diffuseMap (albedo)
-// * Samp s0: sampLinear
 
 #define MAX_POINT_LIGHTS 32
 
 struct PointLight
 {
     float3 position;
-    float range; // attenuation radius
+    float range;
     float3 color;
-    float intensity; // multiplier
+    float intensity;
 };
 
-// ------------- constant buffers -------------
 cbuffer ConstantBuffer : register(b0)
 {
-    row_major float4x4 world;
-    row_major float4x4 view;
-    row_major float4x4 projection;
+    float4x4 world;
+    float4x4 view;
+    float4x4 projection;
 };
 
 cbuffer LightBuffer : register(b1)
@@ -32,20 +23,25 @@ cbuffer LightBuffer : register(b1)
     float3 dirLightColor;
     float pad1;
 
-    float3 viewPos;
+    float3 matAmbient;
     float pad2;
+    float3 matDiffuse;
+    float pad3;
+    float3 matSpecular;
+    float matSpecPower;
+
+    float3 viewPos;
+    float pad4;
 
     int pointCount;
-    float3 padPoint; // 16‑byte alignment
+    float3 padPoint;
 
     PointLight pLights[MAX_POINT_LIGHTS];
 };
 
-// ------------- resources -------------
 Texture2D diffuseMap : register(t0);
 SamplerState sampLinear : register(s0);
 
-// ------------- vertex stage -------------
 struct VS_IN
 {
     float3 pos : POSITION;
@@ -65,12 +61,10 @@ VS_OUT VSMain(VS_IN IN)
 {
     VS_OUT OUT;
 
-    // world space position & normal
     float4 wPos = mul(float4(IN.pos, 1.0f), world);
     OUT.worldPos = wPos.xyz;
     OUT.normal = mul(IN.normal, (float3x3) world);
 
-    // clip space position
     OUT.svPos = mul(wPos, view);
     OUT.svPos = mul(OUT.svPos, projection);
 
@@ -78,19 +72,16 @@ VS_OUT VSMain(VS_IN IN)
     return OUT;
 }
 
-// ------------- pixel stage -------------
 float4 PSMain(VS_OUT IN) : SV_TARGET
 {
     float3 albedo = diffuseMap.Sample(sampLinear, IN.uv).rgb;
     float3 N = normalize(IN.normal);
     float3 color = 0.0f;
 
-    // directional light
     float3 Ld = normalize(-dirLightDir);
     float NdotL = saturate(dot(N, Ld));
     color += albedo * dirLightColor * NdotL;
 
-    // point lights
     [loop]
     for (int i = 0; i < pointCount; ++i)
     {
@@ -104,7 +95,6 @@ float4 PSMain(VS_OUT IN) : SV_TARGET
         color += albedo * pLights[i].color * pLights[i].intensity * lambert * atten;
     }
 
-    // ambient term
     color += albedo * 0.1f;
 
     return float4(color, 1.0f);

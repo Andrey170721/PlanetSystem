@@ -33,6 +33,9 @@
     <ClCompile Include="..\..\DirectXTK\Src\SimpleMath.cpp">
       <Filter>Исходные файлы</Filter>
     </ClCompile>
+    <ClCompile Include="ModelLoader.cpp">
+      <Filter>Исходные файлы</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="MyRender.h">
@@ -47,9 +50,15 @@
     <ClInclude Include="GameObject.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="ModelLoader.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="shader.hlsl">
+      <Filter>Shaders</Filter>
+    </None>
+    <None Include="shader1.hlsl">
       <Filter>Shaders</Filter>
     </None>
   </ItemGroup>
